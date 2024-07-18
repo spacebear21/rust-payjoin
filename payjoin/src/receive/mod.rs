@@ -509,6 +509,35 @@ impl ProvisionalProposal {
         Ok(())
     }
 
+    pub fn try_substitute_receiver_outputs(
+        &mut self,
+        outputs: Option<impl IntoIterator<Item = TxOut>>,
+    ) -> Result<(), Error> {
+        match outputs {
+            Some(o) => {
+                let mut outputs = o.into_iter();
+                let mut new_outputs = vec![];
+                for (i, output) in self.payjoin_psbt.unsigned_tx.output.iter().enumerate() {
+                    if self.owned_vouts.contains(&i) {
+                        // Receiver output: substitute with a provided output
+                        // TODO: properly handle not enough outputs
+                        // TODO: randomly pick from outputs?
+                        new_outputs.push(outputs.next().expect("Not enough outputs supplied!"));
+                    } else {
+                        // Sender output: leave it as is
+                        new_outputs.push(output.clone());
+                    }
+                }
+                // Append all remaining outputs
+                new_outputs.extend(outputs);
+                self.payjoin_psbt.unsigned_tx.output = new_outputs;
+                // TODO: is tx funded or does it need more inputs?
+            }
+            None => return Ok(()),
+        }
+        todo!();
+    }
+
     /// Apply additional fee contribution now that the receiver has contributed input
     /// this is kind of a "build_proposal" step before we sign and finalize and extract
     ///

@@ -501,12 +501,10 @@ impl ProvisionalProposal {
         &mut self,
         generate_script: impl Fn() -> Result<bitcoin::ScriptBuf, Error>,
     ) -> Result<(), Error> {
-        if self.params.disable_output_substitution {
-            return Err(Error::Server("Output substitution is disabled.".into()));
-        }
-        let substitute_script = generate_script()?;
-        self.payjoin_psbt.unsigned_tx.output[self.owned_vouts[0]].script_pubkey = substitute_script;
-        Ok(())
+        let output_value = self.payjoin_psbt.unsigned_tx.output[self.owned_vouts[0]].value;
+        let generate_outputs =
+            || Ok(vec![TxOut { value: output_value, script_pubkey: generate_script()? }]);
+        self.try_substitute_receiver_outputs(Some(generate_outputs))
     }
 
     pub fn try_substitute_receiver_outputs(
@@ -542,7 +540,7 @@ impl ProvisionalProposal {
             }
             None => return Ok(()),
         }
-        todo!();
+        Ok(())
     }
 
     /// Apply additional fee contribution now that the receiver has contributed input

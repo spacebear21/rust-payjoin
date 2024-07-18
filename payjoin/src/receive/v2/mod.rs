@@ -422,6 +422,13 @@ impl ProvisionalProposal {
         self.inner.try_substitute_receiver_output(generate_script)
     }
 
+    pub fn try_substitute_receiver_outputs(
+        &mut self,
+        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>,
+    ) -> Result<(), Error> {
+        self.inner.try_substitute_receiver_outputs(generate_outputs)
+    }
+
     pub fn finalize_proposal(
         self,
         wallet_process_psbt: impl Fn(&Psbt) -> Result<Psbt, Error>,

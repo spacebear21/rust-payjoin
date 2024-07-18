@@ -511,27 +511,34 @@ impl ProvisionalProposal {
 
     pub fn try_substitute_receiver_outputs(
         &mut self,
-        outputs: Option<impl IntoIterator<Item = TxOut>>,
+        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>,
     ) -> Result<(), Error> {
-        match outputs {
-            Some(o) => {
-                let mut outputs = o.into_iter();
-                let mut new_outputs = vec![];
+        match generate_outputs {
+            Some(gen_outputs) => {
+                if self.params.disable_output_substitution {
+                    return Err(Error::Server("Output substitution is disabled.".into()));
+                }
+                let mut replacement_outputs = gen_outputs()?.into_iter();
+                let mut outputs = vec![];
                 for (i, output) in self.payjoin_psbt.unsigned_tx.output.iter().enumerate() {
                     if self.owned_vouts.contains(&i) {
                         // Receiver output: substitute with a provided output
-                        // TODO: properly handle not enough outputs
-                        // TODO: randomly pick from outputs?
-                        new_outputs.push(outputs.next().expect("Not enough outputs supplied!"));
+                        // TODO: pick from outputs in random order?
+                        outputs.push(
+                            replacement_outputs
+                                .next()
+                                .ok_or(Error::Server("Not enough outputs".into()))?,
+                        );
                     } else {
                         // Sender output: leave it as is
-                        new_outputs.push(output.clone());
+                        outputs.push(output.clone());
                     }
                 }
                 // Append all remaining outputs
-                new_outputs.extend(outputs);
-                self.payjoin_psbt.unsigned_tx.output = new_outputs;
+                outputs.extend(replacement_outputs);
+                self.payjoin_psbt.unsigned_tx.output = outputs;
                 // TODO: is tx funded or does it need more inputs?
+                // TODO: does self.owned_vouts need to be updated?
             }
             None => return Ok(()),
         }

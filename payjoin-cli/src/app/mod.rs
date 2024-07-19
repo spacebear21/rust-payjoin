@@ -95,7 +95,7 @@ pub trait App {
 }
 
 fn try_contributing_inputs(
-    payjoin: &mut payjoin::receive::ProvisionalProposal,
+    payjoin: &mut payjoin::receive::WantsInputs,
     bitcoind: &bitcoincore_rpc::Client,
 ) -> Result<()> {
     use bitcoin::OutPoint;

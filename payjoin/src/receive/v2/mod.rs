@@ -370,20 +370,46 @@ impl OutputsUnknown {
     pub fn identify_receiver_outputs(
         self,
         is_receiver_output: impl Fn(&Script) -> Result<bool, Error>,
-    ) -> Result<ProvisionalProposal, Error> {
+    ) -> Result<WantsOutputs, Error> {
         let inner = self.inner.identify_receiver_outputs(is_receiver_output)?;
-        Ok(ProvisionalProposal { inner, context: self.context })
+        Ok(WantsOutputs { inner, context: self.context })
     }
 }
 
-/// A mutable checked proposal that the receiver may contribute inputs to to make a payjoin.
-#[derive(Debug, Clone)]
-pub struct ProvisionalProposal {
-    pub inner: super::ProvisionalProposal,
+pub struct WantsOutputs {
+    inner: super::WantsOutputs,
     context: SessionContext,
 }
 
-impl ProvisionalProposal {
+impl WantsOutputs {
+    pub fn is_output_substitution_disabled(&self) -> bool {
+        self.inner.is_output_substitution_disabled()
+    }
+
+    /// If output substitution is enabled, replace the receiver's output script with a new one.
+    pub fn try_substitute_receiver_output(
+        self,
+        generate_script: impl Fn() -> Result<bitcoin::ScriptBuf, Error>,
+    ) -> Result<WantsInputs, Error> {
+        let inner = self.inner.try_substitute_receiver_output(generate_script)?;
+        Ok(WantsInputs { inner, context: self.context })
+    }
+
+    pub fn try_substitute_receiver_outputs(
+        self,
+        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>,
+    ) -> Result<WantsInputs, Error> {
+        let inner = self.inner.try_substitute_receiver_outputs(generate_outputs)?;
+        Ok(WantsInputs { inner, context: self.context })
+    }
+}
+
+pub struct WantsInputs {
+    inner: super::WantsInputs,
+    context: SessionContext,
+}
+
+impl WantsInputs {
     /// Select receiver input such that the payjoin avoids surveillance.
     /// Return the input chosen that has been applied to the Proposal.
     ///
@@ -410,25 +436,21 @@ impl ProvisionalProposal {
         self.inner.contribute_non_witness_input(tx, outpoint)
     }
 
-    pub fn is_output_substitution_disabled(&self) -> bool {
-        self.inner.is_output_substitution_disabled()
+    // TODO: temporary hack. contribute_inputs should just return a ProvisionalProposal
+    pub fn provisional_proposal(self) -> ProvisionalProposal {
+        let inner = self.inner.provisional_proposal();
+        ProvisionalProposal { inner, context: self.context }
     }
+}
 
-    /// If output substitution is enabled, replace the receiver's output script with a new one.
-    pub fn try_substitute_receiver_output(
-        &mut self,
-        generate_script: impl Fn() -> Result<bitcoin::ScriptBuf, Error>,
-    ) -> Result<(), Error> {
-        self.inner.try_substitute_receiver_output(generate_script)
-    }
+/// A mutable checked proposal that the receiver may contribute inputs to to make a payjoin.
+#[derive(Debug, Clone)]
+pub struct ProvisionalProposal {
+    pub inner: super::ProvisionalProposal,
+    context: SessionContext,
+}
 
-    pub fn try_substitute_receiver_outputs(
-        &mut self,
-        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>,
-    ) -> Result<(), Error> {
-        self.inner.try_substitute_receiver_outputs(generate_outputs)
-    }
-
+impl ProvisionalProposal {
     pub fn finalize_proposal(
         self,
         wallet_process_psbt: impl Fn(&Psbt) -> Result<Psbt, Error>,

@@ -305,7 +305,7 @@ impl OutputsUnknown {
     pub fn identify_receiver_outputs(
         self,
         is_receiver_output: impl Fn(&Script) -> Result<bool, Error>,
-    ) -> Result<ProvisionalProposal, Error> {
+    ) -> Result<WantsOutputs, Error> {
         let owned_vouts: Vec<usize> = self
             .psbt
             .unsigned_tx
@@ -323,7 +323,7 @@ impl OutputsUnknown {
             return Err(Error::BadRequest(InternalRequestError::MissingPayment.into()));
         }
 
-        Ok(ProvisionalProposal {
+        Ok(WantsOutputs {
             original_psbt: self.psbt.clone(),
             payjoin_psbt: self.psbt,
             params: self.params,
@@ -332,16 +332,81 @@ impl OutputsUnknown {
     }
 }
 
-/// A mutable checked proposal that the receiver may contribute inputs to to make a payjoin.
-#[derive(Debug, Clone)]
-pub struct ProvisionalProposal {
+pub struct WantsOutputs {
     original_psbt: Psbt,
     payjoin_psbt: Psbt,
     params: Params,
     owned_vouts: Vec<usize>,
 }
 
-impl ProvisionalProposal {
+impl WantsOutputs {
+    pub fn is_output_substitution_disabled(&self) -> bool {
+        self.params.disable_output_substitution
+    }
+
+    /// If output substitution is enabled, replace the receiver's output script with a new one.
+    pub fn try_substitute_receiver_output(
+        self,
+        generate_script: impl Fn() -> Result<bitcoin::ScriptBuf, Error>,
+    ) -> Result<WantsInputs, Error> {
+        let output_value = self.payjoin_psbt.unsigned_tx.output[self.owned_vouts[0]].value;
+        let generate_outputs =
+            || Ok(vec![TxOut { value: output_value, script_pubkey: generate_script()? }]);
+        self.try_substitute_receiver_outputs(Some(generate_outputs))
+    }
+
+    pub fn try_substitute_receiver_outputs(
+        self,
+        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>, // TODO: this sucks when
+                                                                          // passing None
+    ) -> Result<WantsInputs, Error> {
+        let mut payjoin_psbt = self.payjoin_psbt.clone();
+        match generate_outputs {
+            Some(gen_outputs) => {
+                if self.params.disable_output_substitution {
+                    return Err(Error::Server("Output substitution is disabled.".into()));
+                }
+                let mut replacement_outputs = gen_outputs()?.into_iter();
+                let mut outputs = vec![];
+                for (i, output) in self.payjoin_psbt.unsigned_tx.output.iter().enumerate() {
+                    if self.owned_vouts.contains(&i) {
+                        // Receiver output: substitute with a provided output
+                        // TODO: pick from outputs in random order?
+                        outputs.push(
+                            replacement_outputs
+                                .next()
+                                .ok_or(Error::Server("Not enough outputs".into()))?,
+                        );
+                    } else {
+                        // Sender output: leave it as is
+                        outputs.push(output.clone());
+                    }
+                }
+                // Append all remaining outputs
+                outputs.extend(replacement_outputs);
+                payjoin_psbt.unsigned_tx.output = outputs;
+                // TODO: update self.owned_vouts?
+                // TODO: is tx funded or does it need more inputs?
+            }
+            None => log::info!("No outputs provided: skipping output substitution."),
+        }
+        Ok(WantsInputs {
+            original_psbt: self.original_psbt,
+            payjoin_psbt,
+            params: self.params,
+            owned_vouts: self.owned_vouts,
+        })
+    }
+}
+
+pub struct WantsInputs {
+    original_psbt: Psbt,
+    payjoin_psbt: Psbt,
+    params: Params,
+    owned_vouts: Vec<usize>,
+}
+
+impl WantsInputs {
     /// Select receiver input such that the payjoin avoids surveillance.
     /// Return the input chosen that has been applied to the Proposal.
     ///
@@ -492,57 +557,27 @@ impl ProvisionalProposal {
         );
     }
 
-    pub fn is_output_substitution_disabled(&self) -> bool {
-        self.params.disable_output_substitution
-    }
-
-    /// If output substitution is enabled, replace the receiver's output script with a new one.
-    pub fn try_substitute_receiver_output(
-        &mut self,
-        generate_script: impl Fn() -> Result<bitcoin::ScriptBuf, Error>,
-    ) -> Result<(), Error> {
-        let output_value = self.payjoin_psbt.unsigned_tx.output[self.owned_vouts[0]].value;
-        let generate_outputs =
-            || Ok(vec![TxOut { value: output_value, script_pubkey: generate_script()? }]);
-        self.try_substitute_receiver_outputs(Some(generate_outputs))
-    }
-
-    pub fn try_substitute_receiver_outputs(
-        &mut self,
-        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>,
-    ) -> Result<(), Error> {
-        match generate_outputs {
-            Some(gen_outputs) => {
-                if self.params.disable_output_substitution {
-                    return Err(Error::Server("Output substitution is disabled.".into()));
-                }
-                let mut replacement_outputs = gen_outputs()?.into_iter();
-                let mut outputs = vec![];
-                for (i, output) in self.payjoin_psbt.unsigned_tx.output.iter().enumerate() {
-                    if self.owned_vouts.contains(&i) {
-                        // Receiver output: substitute with a provided output
-                        // TODO: pick from outputs in random order?
-                        outputs.push(
-                            replacement_outputs
-                                .next()
-                                .ok_or(Error::Server("Not enough outputs".into()))?,
-                        );
-                    } else {
-                        // Sender output: leave it as is
-                        outputs.push(output.clone());
-                    }
-                }
-                // Append all remaining outputs
-                outputs.extend(replacement_outputs);
-                self.payjoin_psbt.unsigned_tx.output = outputs;
-                // TODO: is tx funded or does it need more inputs?
-                // TODO: does self.owned_vouts need to be updated?
-            }
-            None => return Ok(()),
+    // TODO: temporary hack. contribute_inputs should just return a ProvisionalProposal
+    pub fn provisional_proposal(self) -> ProvisionalProposal {
+        ProvisionalProposal {
+            original_psbt: self.original_psbt,
+            payjoin_psbt: self.payjoin_psbt,
+            params: self.params,
+            owned_vouts: self.owned_vouts,
         }
-        Ok(())
     }
+}
 
+/// A mutable checked proposal that the receiver may contribute inputs to to make a payjoin.
+#[derive(Debug, Clone)]
+pub struct ProvisionalProposal {
+    original_psbt: Psbt,
+    payjoin_psbt: Psbt,
+    params: Params,
+    owned_vouts: Vec<usize>,
+}
+
+impl ProvisionalProposal {
     /// Apply additional fee contribution now that the receiver has contributed input
     /// this is kind of a "build_proposal" step before we sign and finalize and extract
     ///
@@ -754,7 +789,10 @@ mod test {
                         .unwrap()
                         .require_network(network))
             })
-            .expect("Receiver output should be identified");
+            .expect("Receiver output should be identified")
+            .try_substitute_receiver_outputs(None::<fn() -> Result<Vec<TxOut>, Error>>)
+            .expect("Substitute outputs should do nothing")
+            .provisional_proposal();
         let payjoin = payjoin.apply_fee(None);
 
         assert!(payjoin.is_ok(), "Payjoin should be a valid PSBT");

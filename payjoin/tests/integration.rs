@@ -138,7 +138,7 @@ mod integration {
             let proposal = proposal.check_no_mixed_input_scripts().unwrap();
 
             // Receive Check 4: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.
-            let mut payjoin = proposal
+            let payjoin = proposal
                 .check_no_inputs_seen_before(|_| Ok(false))
                 .unwrap()
                 .identify_receiver_outputs(|output_script| {
@@ -148,6 +148,16 @@ mod integration {
                     Ok(receiver.get_address_info(&address).unwrap().is_mine.unwrap())
                 })
                 .expect("Receiver should have at least one output");
+
+            let mut payjoin = payjoin
+                .try_substitute_receiver_output(|| {
+                    Ok(receiver
+                        .get_new_address(None, None)
+                        .unwrap()
+                        .assume_checked()
+                        .script_pubkey())
+                })
+                .expect("Could not substitute outputs");
 
             // Select receiver payjoin inputs. TODO Lock them.
             let available_inputs = receiver.list_unspent(None, None, None, None, None).unwrap();
@@ -171,10 +181,8 @@ mod integration {
                 bitcoin::OutPoint { txid: selected_utxo.txid, vout: selected_utxo.vout };
             payjoin.contribute_witness_input(txo_to_contribute, outpoint_to_contribute);
 
-            _ = payjoin.try_substitute_receiver_output(|| {
-                Ok(receiver.get_new_address(None, None).unwrap().assume_checked().script_pubkey())
-            });
             let payjoin_proposal = payjoin
+                .provisional_proposal() //hack
                 .finalize_proposal(
                     |psbt: &Psbt| {
                         Ok(receiver
@@ -737,7 +745,7 @@ mod integration {
             let proposal = proposal.check_no_mixed_input_scripts().unwrap();
 
             // Receive Check 4: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.
-            let mut payjoin = proposal
+            let payjoin = proposal
                 .check_no_inputs_seen_before(|_| Ok(false))
                 .unwrap()
                 .identify_receiver_outputs(|output_script| {
@@ -747,6 +755,16 @@ mod integration {
                     Ok(receiver.get_address_info(&address).unwrap().is_mine.unwrap())
                 })
                 .expect("Receiver should have at least one output");
+
+            let mut payjoin = payjoin
+                .try_substitute_receiver_output(|| {
+                    Ok(receiver
+                        .get_new_address(None, None)
+                        .unwrap()
+                        .assume_checked()
+                        .script_pubkey())
+                })
+                .expect("Could not substitute outputs");
 
             // Select receiver payjoin inputs. TODO Lock them.
             let available_inputs = receiver.list_unspent(None, None, None, None, None).unwrap();
@@ -770,10 +788,8 @@ mod integration {
                 bitcoin::OutPoint { txid: selected_utxo.txid, vout: selected_utxo.vout };
             payjoin.contribute_witness_input(txo_to_contribute, outpoint_to_contribute);
 
-            _ = payjoin.try_substitute_receiver_output(|| {
-                Ok(receiver.get_new_address(None, None).unwrap().assume_checked().script_pubkey())
-            });
             let payjoin_proposal = payjoin
+                .provisional_proposal() // hack
                 .finalize_proposal(
                     |psbt: &Psbt| {
                         Ok(receiver

@@ -405,7 +405,7 @@ impl WantsOutputs {
 }
 
 pub struct WantsInputs {
-    inner: super::WantsInputs,
+    pub inner: super::WantsInputs,
     context: SessionContext,
 }
 

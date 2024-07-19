@@ -334,10 +334,13 @@ impl App {
             }
         })?;
 
+        let mut provisional_payjoin = provisional_payjoin
+            .try_substitute_receiver_outputs(None::<fn() -> Result<Vec<bitcoin::TxOut>, Error>>)?;
+
         _ = try_contributing_inputs(&mut provisional_payjoin.inner, &bitcoind)
             .map_err(|e| log::warn!("Failed to contribute inputs: {}", e));
 
-        let payjoin_proposal = provisional_payjoin.finalize_proposal(
+        let payjoin_proposal = provisional_payjoin.provisional_proposal().finalize_proposal(
             |psbt: &Psbt| {
                 bitcoind
                     .wallet_process_psbt(&psbt.to_string(), None, None, Some(false))

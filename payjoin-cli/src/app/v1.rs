@@ -297,7 +297,7 @@ impl App {
         })?;
         log::trace!("check4");
 
-        let mut provisional_payjoin = payjoin.identify_receiver_outputs(|output_script| {
+        let provisional_payjoin = payjoin.identify_receiver_outputs(|output_script| {
             if let Ok(address) = bitcoin::Address::from_script(output_script, network) {
                 bitcoind
                     .get_address_info(&address)

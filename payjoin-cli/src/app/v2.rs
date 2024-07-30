@@ -323,7 +323,7 @@ impl App {
         })?;
         log::trace!("check4");
 
-        let mut provisional_payjoin = payjoin.identify_receiver_outputs(|output_script| {
+        let provisional_payjoin = payjoin.identify_receiver_outputs(|output_script| {
             if let Ok(address) = bitcoin::Address::from_script(output_script, network) {
                 bitcoind
                     .get_address_info(&address)
@@ -334,8 +334,7 @@ impl App {
             }
         })?;
 
-        let mut provisional_payjoin = provisional_payjoin
-            .try_substitute_receiver_outputs(None::<fn() -> Result<Vec<bitcoin::TxOut>, Error>>)?;
+        let mut provisional_payjoin = provisional_payjoin.try_substitute_receiver_outputs(None)?;
 
         _ = try_contributing_inputs(&mut provisional_payjoin.inner, &bitcoind)
             .map_err(|e| log::warn!("Failed to contribute inputs: {}", e));

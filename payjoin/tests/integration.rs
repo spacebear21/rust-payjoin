@@ -757,12 +757,7 @@ mod integration {
                 .expect("Receiver should have at least one output");
 
             let mut payjoin = payjoin
-                // TODO:
-                // a- `None` approach is a pita because type inference doesn't work
-                // b- hard to substitute outputs when output value from payjoin_psbt is not accessible
-                .try_substitute_receiver_outputs(
-                    None::<fn() -> Result<Vec<bitcoin::TxOut>, payjoin::Error>>,
-                )
+                .try_substitute_receiver_outputs(None)
                 .expect("Could not substitute outputs");
 
             // Select receiver payjoin inputs. TODO Lock them.

@@ -397,7 +397,7 @@ impl WantsOutputs {
 
     pub fn try_substitute_receiver_outputs(
         self,
-        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>,
+        generate_outputs: Option<Vec<TxOut>>,
     ) -> Result<WantsInputs, Error> {
         let inner = self.inner.try_substitute_receiver_outputs(generate_outputs)?;
         Ok(WantsInputs { inner, context: self.context })

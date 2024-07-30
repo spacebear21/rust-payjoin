@@ -350,23 +350,21 @@ impl WantsOutputs {
         generate_script: impl Fn() -> Result<bitcoin::ScriptBuf, Error>,
     ) -> Result<WantsInputs, Error> {
         let output_value = self.payjoin_psbt.unsigned_tx.output[self.owned_vouts[0]].value;
-        let generate_outputs =
-            || Ok(vec![TxOut { value: output_value, script_pubkey: generate_script()? }]);
-        self.try_substitute_receiver_outputs(Some(generate_outputs))
+        let outputs = vec![TxOut { value: output_value, script_pubkey: generate_script()? }];
+        self.try_substitute_receiver_outputs(Some(outputs))
     }
 
     pub fn try_substitute_receiver_outputs(
         self,
-        generate_outputs: Option<impl Fn() -> Result<Vec<TxOut>, Error>>, // TODO: this sucks when
-                                                                          // passing None
+        outputs: Option<Vec<TxOut>>,
     ) -> Result<WantsInputs, Error> {
         let mut payjoin_psbt = self.payjoin_psbt.clone();
-        match generate_outputs {
-            Some(gen_outputs) => {
+        match outputs {
+            Some(o) => {
                 if self.params.disable_output_substitution {
                     return Err(Error::Server("Output substitution is disabled.".into()));
                 }
-                let mut replacement_outputs = gen_outputs()?.into_iter();
+                let mut replacement_outputs = o.into_iter();
                 let mut outputs = vec![];
                 for (i, output) in self.payjoin_psbt.unsigned_tx.output.iter().enumerate() {
                     if self.owned_vouts.contains(&i) {
@@ -790,7 +788,7 @@ mod test {
                         .require_network(network))
             })
             .expect("Receiver output should be identified")
-            .try_substitute_receiver_outputs(None::<fn() -> Result<Vec<TxOut>, Error>>)
+            .try_substitute_receiver_outputs(None)
             .expect("Substitute outputs should do nothing")
             .provisional_proposal();
         let payjoin = payjoin.apply_fee(None);

@@ -195,9 +195,15 @@ impl<'a> InputPair<'a> {
         // Get the input weight prediction corresponding to spending an output of this address type
         let iwp = match self.address_type()? {
             P2pkh => Ok(InputWeightPrediction::P2PKH_COMPRESSED_MAX),
-            P2sh =>
-                match self.psbtin.final_script_sig.as_ref().and_then(|s| redeem_script(s.as_ref()))
-                {
+            P2sh => {
+                let redeem_script = if let Some(ref script_sig) = self.psbtin.final_script_sig {
+                    redeem_script(script_sig.as_ref())
+                } else if let Some(ref script) = self.psbtin.redeem_script {
+                    Some(script.as_ref())
+                } else {
+                    None
+                };
+                match redeem_script {
                     // Nested segwit p2wpkh.
                     Some(script) if script.is_witness_program() && script.is_p2wpkh() =>
                         Ok(NESTED_P2WPKH_MAX),
@@ -205,7 +211,8 @@ impl<'a> InputPair<'a> {
                     Some(_) => Err(InputWeightError::NotSupported),
                     // No redeem script provided. Cannot determine the script type.
                     None => Err(InputWeightError::NotFinalized),
-                },
+                }
+            }
             P2wpkh => Ok(InputWeightPrediction::P2WPKH_MAX),
             P2wsh => Err(InputWeightError::NotSupported),
             P2tr => Ok(InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH),

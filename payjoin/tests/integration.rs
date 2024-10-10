@@ -639,15 +639,10 @@ mod integration {
                 .iter()
                 .find(|i| i.txid == selected_outpoint.txid && i.vout == selected_outpoint.vout)
                 .unwrap();
-            let txo_to_contribute = bitcoin::TxOut {
-                value: selected_utxo.amount,
-                script_pubkey: selected_utxo.script_pub_key.clone(),
-            };
+            let input_pair = input_pair_from_list_unspent(selected_utxo);
 
-            let payjoin = payjoin
-                .contribute_witness_inputs(vec![(selected_outpoint, txo_to_contribute)])
-                .unwrap()
-                .commit_inputs();
+            let payjoin =
+                payjoin.contribute_witness_inputs(vec![input_pair]).unwrap().commit_inputs();
 
             // Sign and finalize the proposal PSBT
             let payjoin_proposal = payjoin
@@ -753,7 +748,7 @@ mod integration {
             let (bitcoind, sender, receiver) = init_bitcoind_sender_receiver()?;
             // Generate more UTXOs for the receiver
             let receiver_address =
-                receiver.get_new_address(None, Some(AddressType::Bech32))?.assume_checked();
+                receiver.get_new_address(None, Some(AddressType::P2shSegwit))?.assume_checked();
             bitcoind.client.generate_to_address(199, &receiver_address)?;
             let receiver_utxos = receiver.list_unspent(None, None, None, None, None).unwrap();
             assert_eq!(100, receiver_utxos.len(), "receiver doesn't have enough UTXOs");
@@ -796,17 +791,7 @@ mod integration {
                     .script_pubkey(),
             }];
             let drain_script = outputs[0].script_pubkey.clone();
-            let inputs = receiver_utxos
-                .iter()
-                .map(|utxo| {
-                    let outpoint = OutPoint { txid: utxo.txid, vout: utxo.vout };
-                    let txo = bitcoin::TxOut {
-                        value: utxo.amount,
-                        script_pubkey: utxo.script_pub_key.clone(),
-                    };
-                    (outpoint, txo)
-                })
-                .collect();
+            let inputs = receiver_utxos.iter().map(input_pair_from_list_unspent).collect();
             let response = handle_v1_pj_request(
                 req,
                 headers,
@@ -953,10 +938,10 @@ mod integration {
         let bitcoind = bitcoind::BitcoinD::with_conf(bitcoind_exe, &conf)?;
         let receiver = bitcoind.create_wallet("receiver")?;
         let receiver_address =
-            receiver.get_new_address(None, Some(AddressType::Bech32))?.assume_checked();
+            receiver.get_new_address(None, Some(AddressType::P2shSegwit))?.assume_checked();
         let sender = bitcoind.create_wallet("sender")?;
         let sender_address =
-            sender.get_new_address(None, Some(AddressType::Bech32))?.assume_checked();
+            sender.get_new_address(None, Some(AddressType::P2shSegwit))?.assume_checked();
         bitcoind.client.generate_to_address(1, &receiver_address)?;
         bitcoind.client.generate_to_address(101, &sender_address)?;
 
@@ -1008,7 +993,7 @@ mod integration {
         receiver: &bitcoincore_rpc::Client,
         custom_outputs: Option<Vec<TxOut>>,
         drain_script: Option<&bitcoin::Script>,
-        custom_inputs: Option<Vec<(OutPoint, TxOut)>>,
+        custom_inputs: Option<Vec<(bitcoin::psbt::Input, bitcoin::TxIn)>>,
     ) -> String {
         // Receiver receive payjoin proposal, IRL it will be an HTTP request (over ssl or onion)
         let proposal = payjoin::receive::UncheckedProposal::from_request(
@@ -1030,7 +1015,7 @@ mod integration {
         receiver: &bitcoincore_rpc::Client,
         custom_outputs: Option<Vec<TxOut>>,
         drain_script: Option<&bitcoin::Script>,
-        custom_inputs: Option<Vec<(OutPoint, TxOut)>>,
+        custom_inputs: Option<Vec<(bitcoin::psbt::Input, bitcoin::TxIn)>>,
     ) -> payjoin::receive::PayjoinProposal {
         // in a payment processor where the sender could go offline, this is where you schedule to broadcast the original_tx
         let _to_broadcast_in_failure_case = proposal.extract_tx_to_schedule_broadcast();
@@ -1100,11 +1085,8 @@ mod integration {
                     .iter()
                     .find(|i| i.txid == selected_outpoint.txid && i.vout == selected_outpoint.vout)
                     .unwrap();
-                let txo_to_contribute = bitcoin::TxOut {
-                    value: selected_utxo.amount,
-                    script_pubkey: selected_utxo.script_pub_key.clone(),
-                };
-                vec![(selected_outpoint, txo_to_contribute)]
+                let input_pair = input_pair_from_list_unspent(selected_utxo);
+                vec![input_pair]
             }
         };
 
@@ -1147,9 +1129,29 @@ mod integration {
 
     fn predicted_tx_weight(tx: &bitcoin::Transaction) -> Weight {
         bitcoin::transaction::predict_weight(
-            vec![bitcoin::transaction::InputWeightPrediction::P2WPKH_MAX; tx.input.len()],
+            vec![bitcoin::transaction::InputWeightPrediction::new(23, [72, 33]); tx.input.len()],
             tx.script_pubkey_lens(),
         )
+    }
+
+    fn input_pair_from_list_unspent(
+        utxo: &bitcoind::bitcoincore_rpc::bitcoincore_rpc_json::ListUnspentResultEntry,
+    ) -> (bitcoin::psbt::Input, bitcoin::TxIn) {
+        let psbtin = bitcoin::psbt::Input {
+            // TODO: non_witness_utxo for legacy support
+            witness_utxo: Some(TxOut {
+                value: utxo.amount,
+                script_pubkey: utxo.script_pub_key.clone(),
+            }),
+            redeem_script: utxo.redeem_script.clone(),
+            witness_script: utxo.witness_script.clone(),
+            ..Default::default()
+        };
+        let txin = bitcoin::TxIn {
+            previous_output: OutPoint { txid: utxo.txid, vout: utxo.vout },
+            ..Default::default()
+        };
+        (psbtin, txin)
     }
 
     struct HeaderMock(HashMap<String, String>);

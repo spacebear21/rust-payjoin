@@ -45,7 +45,7 @@ use error::{
 };
 use optional_parameters::Params;
 
-use crate::psbt::PsbtExt;
+use crate::psbt::{InputPair, PsbtExt};
 
 pub trait Headers {
     fn get_header(&self, key: &str) -> Option<&str>;
@@ -577,7 +577,7 @@ impl WantsInputs {
     /// Any excess input amount is added to the change_vout output indicated previously.
     pub fn contribute_witness_inputs(
         self,
-        inputs: impl IntoIterator<Item = (OutPoint, TxOut)>,
+        inputs: impl IntoIterator<Item = (bitcoin::psbt::Input, bitcoin::TxIn)>,
     ) -> Result<WantsInputs, InputContributionError> {
         let mut payjoin_psbt = self.payjoin_psbt.clone();
         // The payjoin proposal must not introduce mixed input sequence numbers
@@ -592,21 +592,15 @@ impl WantsInputs {
         // Insert contributions at random indices for privacy
         let mut rng = rand::thread_rng();
         let mut receiver_input_amount = Amount::ZERO;
-        for (outpoint, txo) in inputs.into_iter() {
-            receiver_input_amount += txo.value;
+        for (psbtin, txin) in inputs.into_iter() {
+            receiver_input_amount +=
+                InputPair { txin: &txin, psbtin: &psbtin }.previous_txout().expect("txout").value;
             let index = rng.gen_range(0..=self.payjoin_psbt.unsigned_tx.input.len());
-            payjoin_psbt.inputs.insert(
-                index,
-                bitcoin::psbt::Input { witness_utxo: Some(txo), ..Default::default() },
-            );
-            payjoin_psbt.unsigned_tx.input.insert(
-                index,
-                bitcoin::TxIn {
-                    previous_output: outpoint,
-                    sequence: original_sequence,
-                    ..Default::default()
-                },
-            );
+            payjoin_psbt.inputs.insert(index, psbtin);
+            payjoin_psbt
+                .unsigned_tx
+                .input
+                .insert(index, bitcoin::TxIn { sequence: original_sequence, ..txin });
         }
 
         // Add the receiver change amount to the receiver change output, if applicable
@@ -838,14 +832,14 @@ impl ProvisionalProposal {
         min_feerate_sat_per_vb: Option<FeeRate>,
         max_feerate_sat_per_vb: FeeRate,
     ) -> Result<PayjoinProposal, Error> {
-        for i in self.sender_input_indexes() {
+        let mut psbt = self.apply_fee(min_feerate_sat_per_vb, max_feerate_sat_per_vb)?.clone();
+        for i in 0..psbt.inputs.len() {
             log::trace!("Clearing sender script signatures for input {}", i);
-            self.payjoin_psbt.inputs[i].final_script_sig = None;
-            self.payjoin_psbt.inputs[i].final_script_witness = None;
-            self.payjoin_psbt.inputs[i].tap_key_sig = None;
+            psbt.inputs[i].final_script_sig = None;
+            psbt.inputs[i].final_script_witness = None;
+            psbt.inputs[i].tap_key_sig = None;
         }
-        let psbt = self.apply_fee(min_feerate_sat_per_vb, max_feerate_sat_per_vb)?;
-        let psbt = wallet_process_psbt(psbt)?;
+        let psbt = wallet_process_psbt(&psbt)?;
         let payjoin_proposal = self.prepare_psbt(psbt)?;
         Ok(payjoin_proposal)
     }
@@ -874,6 +868,7 @@ impl PayjoinProposal {
 mod test {
     use std::str::FromStr;
 
+    use bitcoin::hashes::serde::Deserialize;
     use bitcoin::hashes::Hash;
     use bitcoin::{Address, Network, ScriptBuf};
     use rand::rngs::StdRng;
@@ -958,23 +953,9 @@ mod test {
         // Specify excessive fee rate in sender params
         proposal.params.min_feerate = FeeRate::from_sat_per_vb_unchecked(1000);
         // Input contribution for the receiver, from the BIP78 test vector
-        let input: (OutPoint, TxOut) = (
-            OutPoint {
-                txid: "833b085de288cda6ff614c6e8655f61e7ae4f84604a2751998dc25a0d1ba278f"
-                    .parse()
-                    .unwrap(),
-                vout: 1,
-            },
-            TxOut {
-                value: Amount::from_sat(2000000),
-                // HACK: The script pubkey in the original test vector is a nested p2sh witness
-                // script, which is not correctly supported in our current weight calculations.
-                // To get around this limitation, this test uses a native segwit script instead.
-                script_pubkey: ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::hash(
-                    "00145f806655e5924c9204c2d51be5394f4bf9eda210".as_bytes(),
-                )),
-            },
-        );
+        let proposal_psbt = Psbt::from_str("cHNidP8BAJwCAAAAAo8nutGgJdyYGXWiBEb45Hoe9lWGbkxh/6bNiOJdCDuDAAAAAAD+////jye60aAl3JgZdaIERvjkeh72VYZuTGH/ps2I4l0IO4MBAAAAAP7///8CJpW4BQAAAAAXqRQd6EnwadJ0FQ46/q6NcutaawlEMIcACT0AAAAAABepFHdAltvPSGdDwi9DR+m0af6+i2d6h9MAAAAAAAEBIICEHgAAAAAAF6kUyPLL+cphRyyI5GTUazV0hF2R2NWHAQcXFgAUX4BmVeWSTJIEwtUb5TlPS/ntohABCGsCRzBEAiBnu3tA3yWlT0WBClsXXS9j69Bt+waCs9JcjWtNjtv7VgIge2VYAaBeLPDB6HGFlpqOENXMldsJezF9Gs5amvDQRDQBIQJl1jz1tBt8hNx2owTm+4Du4isx0pmdKNMNIjjaMHFfrQAAAA==").unwrap();
+        let input: (bitcoin::psbt::Input, bitcoin::TxIn) =
+            (proposal_psbt.inputs[1].clone(), proposal_psbt.unsigned_tx.input[1].clone());
         let mut payjoin = proposal
             .assume_interactive_receiver()
             .check_inputs_not_owned(|_| Ok(false))
@@ -1021,13 +1002,18 @@ mod test {
 
         // Input weight for a single nested P2WPKH (nested segwit) receiver input
         let nested_p2wpkh_proposal = ProvisionalProposal {
-            original_psbt: Psbt::from_str("cHNidP8BAHECAAAAAX57euL5j6xOst5JB/e/gp58RihmmpxXpsc2hEKKcVFkAAAAAAD9////AhAnAAAAAAAAFgAUtjrU62JOASAnPQ4e30wBM/Exk7ZM0QKVAAAAABYAFL6xh6gjSHmznJnPMbolG7wbGuwtAAAAAAABAIYCAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wQCqgAA/////wIA+QKVAAAAABepFOyefe4gjXozL4pzi5vcPrjMeCJwhwAAAAAAAAAAJmokqiGp7eL2HD9x0d79P6mZ36NpU3VcaQaJeZlitIvr2DaXToz5AAAAAAEBIAD5ApUAAAAAF6kU7J597iCNejMvinOLm9w+uMx4InCHAQcXFgAUd6fhKfAd+JIJGpIGkMfMpjd/26sBCGsCRzBEAiBaCDgIrTw5bB1VZrB8RPycgKGNPw/YS6P+psUyxOUwgwIgbJkcbHlMoZxG7vBOVWnQQWayDTSvub6L20dDo1R5SS8BIQK2GCTydo2dJXC6C5wcSKzQ2pCsSygXa0+cMlJrRRnKtwAAIgIC0VgJvaoW2/lbq5atJhxfcgVzs6/gnpafsJHbz+ei484YDOqFk1QAAIABAACAAAAAgAEAAAACAAAAAA==").unwrap(),
-            payjoin_psbt: Psbt::from_str("cHNidP8BAJoCAAAAAn57euL5j6xOst5JB/e/gp58RihmmpxXpsc2hEKKcVFkAAAAAAD9////VinByqmVDo3wPNB9LnNELJoJ0g+hOdWiTSXzWEUVtiAAAAAAAP3///8CEBkGKgEAAAAWABSZUDn7eqenP01ziWRBnTCrpwwD6vHQApUAAAAAFgAUvrGHqCNIebOcmc8xuiUbvBsa7C0AAAAAAAEAhgIAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/////BAKqAAD/////AgD5ApUAAAAAF6kU7J597iCNejMvinOLm9w+uMx4InCHAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQEgAPkClQAAAAAXqRTsnn3uII16My+Kc4ub3D64zHgicIcAAQCEAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8CYAD/////AgDyBSoBAAAAF6kUx/+ZHBBBZ+6E/US1N2Oe7IDItXiHAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQEgAPIFKgEAAAAXqRTH/5kcEEFn7oT9RLU3Y57sgMi1eIcBBxcWABRDVkPBhZHK7tVQqp2uWqQC/GGTCgEIawJHMEQCIEv8/8VpUz0dK4MCcVzS7zoyt+hPRvWwLskZBuaurnFiAiBIuyt1IRaHqFSspDbjDNM607nrDQz4lmDnekNqMNn07AEhAp1Ol7vKvG2Oi8RSrsb7uSPTET83/YXuknx63PhfCG/zAAAA").unwrap(),
+            original_psbt: Psbt::from_str("cHNidP8BAHECAAAAAeOsT9cRWRz3te+bgmtweG1vDLkdSH4057NuoodDNPFWAAAAAAD9////AhAnAAAAAAAAFgAUtp3bPFM/YWThyxD5Cc9OR4mb8tdMygUqAQAAABYAFODlplDoE6EGlZvmqoUngBgsu8qCAAAAAAABAIUCAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wMBZwD/////AgDyBSoBAAAAF6kU2JnIn4Mmcb5kuF3EYeFei8IB43qHAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQEgAPIFKgEAAAAXqRTYmcifgyZxvmS4XcRh4V6LwgHjeocBBxcWABSPGoPK1yl60X4Z9OfA7IQPUWCgVwEIawJHMEQCICZG3s2cbulPnLTvK4TwlKhsC+cem8tD2GjZZ3eMJD7FAiADh/xwv0ib8ksOrj1M27DYLiw7WFptxkMkE2YgiNMRVgEhAlDMm5DA8kU+QGiPxEWUyV1S8+XGzUOepUOck257ZOhkAAAiAgP+oMbeca66mt+UtXgHm6v/RIFEpxrwG7IvPDim5KWHpBgfVHrXVAAAgAEAAIAAAACAAQAAAAAAAAAA").unwrap(),
+            payjoin_psbt: Psbt::from_str("cHNidP8BAJoCAAAAAuXYOTUaVRiB8cPPhEXzcJ72/SgZOPEpPx5pkG0fNeGCAAAAAAD9////46xP1xFZHPe175uCa3B4bW8MuR1IfjTns26ih0M08VYAAAAAAP3///8CEBkGKgEAAAAWABQHuuu4H4fbQWV51IunoJLUtmMTfEzKBSoBAAAAFgAU4OWmUOgToQaVm+aqhSeAGCy7yoIAAAAAAAEBIADyBSoBAAAAF6kUQ4BssmVBS3r0s95c6dl1DQCHCR+HAQQWABQbDc333XiiOeEXroP523OoYNb1aAABAIUCAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wMBZwD/////AgDyBSoBAAAAF6kU2JnIn4Mmcb5kuF3EYeFei8IB43qHAAAAAAAAAAAmaiSqIant4vYcP3HR3v0/qZnfo2lTdVxpBol5mWK0i+vYNpdOjPkAAAAAAQEgAPIFKgEAAAAXqRTYmcifgyZxvmS4XcRh4V6LwgHjeocBBxcWABSPGoPK1yl60X4Z9OfA7IQPUWCgVwEIawJHMEQCICZG3s2cbulPnLTvK4TwlKhsC+cem8tD2GjZZ3eMJD7FAiADh/xwv0ib8ksOrj1M27DYLiw7WFptxkMkE2YgiNMRVgEhAlDMm5DA8kU+QGiPxEWUyV1S8+XGzUOepUOck257ZOhkAAAA").unwrap(),
             params: Params::default(),
             change_vout: 0
         };
         // Currently nested segwit is not supported, see https://github.com/payjoin/rust-payjoin/issues/358
-        assert!(nested_p2wpkh_proposal.additional_input_weight().is_err());
+        assert_eq!(
+            nested_p2wpkh_proposal
+                .additional_input_weight()
+                .expect("should calculate input weight"),
+            Weight::from_wu(364)
+        );
 
         // Input weight for a single P2WPKH (native segwit) receiver input
         let p2wpkh_proposal = ProvisionalProposal {

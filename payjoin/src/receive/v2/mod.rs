@@ -468,7 +468,7 @@ impl WantsInputs {
     /// Any excess input amount is added to the change_vout output indicated previously.
     pub fn contribute_witness_inputs(
         self,
-        inputs: impl IntoIterator<Item = (OutPoint, TxOut)>,
+        inputs: impl IntoIterator<Item = (bitcoin::psbt::Input, bitcoin::TxIn)>,
     ) -> Result<WantsInputs, InputContributionError> {
         let inner = self.inner.contribute_witness_inputs(inputs)?;
         Ok(WantsInputs { inner, context: self.context })

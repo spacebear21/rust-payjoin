@@ -774,12 +774,7 @@ impl ProvisionalProposal {
         output_contribution_weight
     }
 
-    /// Return a Payjoin Proposal PSBT that the sender will find acceptable.
-    ///
-    /// This attempts to calculate any network fee owed by the receiver, subtract it from their output,
-    /// and return a PSBT that can produce a consensus-valid transaction that the sender will accept.
-    ///
-    /// wallet_process_psbt should sign and finalize receiver inputs
+    /// Prepare the PSBT by clearing the fields that the sender expects to be empty
     fn prepare_psbt(mut self, processed_psbt: Psbt) -> Result<PayjoinProposal, RequestError> {
         self.payjoin_psbt = processed_psbt;
         log::trace!("Preparing PSBT {:#?}", self.payjoin_psbt);
@@ -806,6 +801,7 @@ impl ProvisionalProposal {
         Ok(PayjoinProposal { payjoin_psbt: self.payjoin_psbt, params: self.params })
     }
 
+    /// Return the indexes of the sender inputs
     fn sender_input_indexes(&self) -> Vec<usize> {
         // iterate proposal as mutable WITH the outpoint (previous_output) available too
         let mut original_inputs = self.original_psbt.input_pairs().peekable();
@@ -826,6 +822,12 @@ impl ProvisionalProposal {
         sender_input_indexes
     }
 
+    /// Return a Payjoin Proposal PSBT that the sender will find acceptable.
+    ///
+    /// This attempts to calculate any network fee owed by the receiver, subtract it from their output,
+    /// and return a PSBT that can produce a consensus-valid transaction that the sender will accept.
+    ///
+    /// wallet_process_psbt should sign and finalize receiver inputs
     pub fn finalize_proposal(
         mut self,
         wallet_process_psbt: impl Fn(&Psbt) -> Result<Psbt, Error>,
@@ -833,8 +835,9 @@ impl ProvisionalProposal {
         max_feerate_sat_per_vb: FeeRate,
     ) -> Result<PayjoinProposal, Error> {
         let mut psbt = self.apply_fee(min_feerate_sat_per_vb, max_feerate_sat_per_vb)?.clone();
-        for i in 0..psbt.inputs.len() {
-            log::trace!("Clearing sender script signatures for input {}", i);
+        // Remove now-invalid sender signatures before applying the receiver signatures
+        for i in self.sender_input_indexes() {
+            log::trace!("Clearing sender input {}", i);
             psbt.inputs[i].final_script_sig = None;
             psbt.inputs[i].final_script_witness = None;
             psbt.inputs[i].tap_key_sig = None;

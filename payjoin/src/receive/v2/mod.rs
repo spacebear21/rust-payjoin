@@ -466,11 +466,11 @@ impl WantsInputs {
 
     /// Add the provided list of inputs to the transaction.
     /// Any excess input amount is added to the change_vout output indicated previously.
-    pub fn contribute_witness_inputs(
+    pub fn contribute_inputs(
         self,
-        inputs: impl IntoIterator<Item = (OutPoint, TxOut)>,
+        inputs: impl IntoIterator<Item = (bitcoin::psbt::Input, bitcoin::TxIn)>,
     ) -> Result<WantsInputs, InputContributionError> {
-        let inner = self.inner.contribute_witness_inputs(inputs)?;
+        let inner = self.inner.contribute_inputs(inputs)?;
         Ok(WantsInputs { inner, context: self.context })
     }
 

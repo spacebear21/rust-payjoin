@@ -860,7 +860,7 @@ mod integration {
                 })
                 .expect("Receiver should not own any of the inputs");
 
-            // Receive Check 3: receiver can't sign for proposal inputs
+            // Receive Check 3: no mixed input scripts
             let proposal = proposal.check_no_mixed_input_scripts().unwrap();
 
             // Receive Check 4: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.
@@ -1301,7 +1301,7 @@ mod integration {
             })
             .expect("Receiver should not own any of the inputs");
 
-        // Receive Check 3: receiver can't sign for proposal inputs
+        // Receive Check 3: no mixed input scripts
         let proposal = proposal.check_no_mixed_input_scripts().unwrap();
 
         // Receive Check 4: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.

@@ -72,6 +72,7 @@ pub async fn listen_tcp_with_tls(
     let bind_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
     let tls_acceptor = init_tls_acceptor(tls_config)?;
     let listener = TcpListener::bind(bind_addr).await?;
+    println!("Directory listening on tcp://{}", bind_addr);
     while let Ok((stream, _)) = listener.accept().await {
         let pool = pool.clone();
         let ohttp = ohttp.clone();

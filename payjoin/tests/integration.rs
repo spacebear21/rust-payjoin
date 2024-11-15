@@ -334,7 +334,7 @@ mod integration {
                     ohttp_keys.clone(),
                     None,
                 );
-                println!("session: {:#?}", &session);
+                //println!("session: {:#?}", &session);
                 let pj_uri_string = session.pj_uri_builder().build().to_string();
                 // Poll receive request
                 let (req, ctx) = session.extract_req()?;
@@ -496,7 +496,7 @@ mod integration {
                     ohttp_keys.clone(),
                     None,
                 );
-                println!("session: {:#?}", &session);
+                //println!("session: {:#?}", &session);
                 let pj_uri_string = session.pj_uri_builder().build().to_string();
                 // Poll receive request
                 let (req, ctx) = session.extract_req()?;
@@ -1237,7 +1237,7 @@ mod integration {
             handle_proposal(proposal, receiver, custom_outputs, drain_script, custom_inputs)?;
         assert!(!proposal.is_output_substitution_disabled());
         let psbt = proposal.psbt();
-        tracing::debug!("Receiver's Payjoin proposal PSBT: {:#?}", &psbt);
+        //tracing::debug!("Receiver's Payjoin proposal PSBT: {:#?}", &psbt);
         Ok(psbt.to_string())
     }
 
@@ -1328,7 +1328,7 @@ mod integration {
         let payjoin_psbt = sender.wallet_process_psbt(&psbt.to_string(), None, None, None)?.psbt;
         let payjoin_psbt = sender.finalize_psbt(&payjoin_psbt, Some(false))?.psbt.unwrap();
         let payjoin_psbt = Psbt::from_str(&payjoin_psbt)?;
-        tracing::debug!("Sender's Payjoin PSBT: {:#?}", payjoin_psbt);
+        //tracing::debug!("Sender's Payjoin PSBT: {:#?}", payjoin_psbt);
 
         Ok(payjoin_psbt.extract_tx()?)
     }

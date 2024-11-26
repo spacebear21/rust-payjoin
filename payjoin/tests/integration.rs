@@ -174,6 +174,7 @@ mod integration {
     #[cfg(feature = "danger-local-https")]
     #[cfg(feature = "v2")]
     mod v2 {
+        use std::collections::HashSet;
         use std::sync::Arc;
         use std::time::Duration;
 
@@ -184,11 +185,13 @@ mod integration {
         use reqwest::{Client, ClientBuilder, Error, Response};
         use testcontainers_modules::redis::Redis;
         use testcontainers_modules::testcontainers::clients::Cli;
+        use tokio::sync::Mutex;
 
         use super::*;
 
         static TESTS_TIMEOUT: Lazy<Duration> = Lazy::new(|| Duration::from_secs(20));
         static WAIT_SERVICE_INTERVAL: Lazy<Duration> = Lazy::new(|| Duration::from_secs(3));
+        static RESERVED_PORTS: Lazy<Mutex<HashSet<u16>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
         #[tokio::test]
         async fn test_bad_ohttp_keys() {
@@ -197,7 +200,7 @@ mod integration {
                     .expect("Invalid OhttpKeys");
 
             let (cert, key) = local_cert_key();
-            let port = find_free_port();
+            let port = reserve_port().await;
             let directory = Url::parse(&format!("https://localhost:{}", port)).unwrap();
             tokio::select!(
                 err = init_directory(port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}", err),
@@ -231,10 +234,10 @@ mod integration {
         async fn test_session_expiration() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = find_free_port();
+            let ohttp_relay_port = reserve_port().await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = find_free_port();
+            let directory_port = reserve_port().await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
@@ -299,10 +302,10 @@ mod integration {
         async fn v2_to_v2() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = find_free_port();
+            let ohttp_relay_port = reserve_port().await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = find_free_port();
+            let directory_port = reserve_port().await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
@@ -431,10 +434,10 @@ mod integration {
         async fn v2_to_v2_mixed_input_script_types() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = find_free_port();
+            let ohttp_relay_port = reserve_port().await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = find_free_port();
+            let directory_port = reserve_port().await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
@@ -648,10 +651,10 @@ mod integration {
         async fn v1_to_v2() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = find_free_port();
+            let ohttp_relay_port = reserve_port().await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = find_free_port();
+            let directory_port = reserve_port().await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
@@ -912,9 +915,16 @@ mod integration {
                 ))
         }
 
-        fn find_free_port() -> u16 {
+        async fn reserve_port() -> u16 {
+            let mut reserved_ports = RESERVED_PORTS.lock().await;
             let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
-            listener.local_addr().unwrap().port()
+            let port = listener.local_addr().unwrap().port();
+            if reserved_ports.insert(port) {
+                println!("{:?}", &reserved_ports);
+                port
+            } else {
+                panic!("PORT RESERVED!!!");
+            }
         }
 
         async fn wait_for_service_ready(

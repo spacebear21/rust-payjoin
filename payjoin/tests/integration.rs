@@ -200,10 +200,10 @@ mod integration {
                     .expect("Invalid OhttpKeys");
 
             let (cert, key) = local_cert_key();
-            let port = reserve_port().await;
+            let port = reserve_port("test_bad_ohttp_keys").await;
             let directory = Url::parse(&format!("https://localhost:{}", port)).unwrap();
             tokio::select!(
-                err = init_directory(port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}", err),
+                err = init_directory(port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}, {:?}", err, port),
                 res = try_request_with_bad_keys(directory, bad_ohttp_keys, cert) => {
                     assert_eq!(
                         res.unwrap().headers().get("content-type").unwrap(),
@@ -234,15 +234,15 @@ mod integration {
         async fn test_session_expiration() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = reserve_port().await;
+            let ohttp_relay_port = reserve_port("test_session_expiration ohttp").await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = reserve_port().await;
+            let directory_port = reserve_port("test_session_expiration directory").await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
-            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}", err),
-            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}", err),
+            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}, {:?}", err, ohttp_relay_port),
+            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}, {:?}", err, directory_port),
             res = do_expiration_tests(ohttp_relay, directory, cert) => assert!(res.is_ok(), "v2 send receive failed: {:#?}", res)
             );
 
@@ -302,15 +302,15 @@ mod integration {
         async fn v2_to_v2() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = reserve_port().await;
+            let ohttp_relay_port = reserve_port("v2_to_v2 ohttp").await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = reserve_port().await;
+            let directory_port = reserve_port("v2_to_v2 directory").await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
-            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}", err),
-            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}", err),
+            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}, {:?}", err, ohttp_relay_port),
+            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}, {:?}", err, directory_port),
             res = do_v2_send_receive(ohttp_relay, directory, cert) => assert!(res.is_ok(), "v2 send receive failed: {:#?}", res)
             );
 
@@ -434,15 +434,15 @@ mod integration {
         async fn v2_to_v2_mixed_input_script_types() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = reserve_port().await;
+            let ohttp_relay_port = reserve_port("v2_to_v2_mixed ohttp").await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = reserve_port().await;
+            let directory_port = reserve_port("v2_to_v2_mixed directory").await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
-            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}", err),
-            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}", err),
+            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}, {:?}", err, ohttp_relay_port),
+            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}, {:?}", err, directory_port),
             res = do_v2_send_receive(ohttp_relay, directory, cert) => assert!(res.is_ok(), "v2 send receive failed: {:#?}", res)
             );
 
@@ -651,15 +651,15 @@ mod integration {
         async fn v1_to_v2() {
             init_tracing();
             let (cert, key) = local_cert_key();
-            let ohttp_relay_port = reserve_port().await;
+            let ohttp_relay_port = reserve_port("v1_to_v2 ohttp").await;
             let ohttp_relay =
                 Url::parse(&format!("http://localhost:{}", ohttp_relay_port)).unwrap();
-            let directory_port = reserve_port().await;
+            let directory_port = reserve_port("v1_to_v2 directory").await;
             let directory = Url::parse(&format!("https://localhost:{}", directory_port)).unwrap();
             let gateway_origin = http::Uri::from_str(directory.as_str()).unwrap();
             tokio::select!(
-            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}", err),
-            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}", err),
+            err = ohttp_relay::listen_tcp(ohttp_relay_port, gateway_origin) => panic!("Ohttp relay exited early: {:?}, {:?}", err, ohttp_relay_port),
+            err = init_directory(directory_port, (cert.clone(), key)) => panic!("Directory server exited early: {:?}, {:?}", err, directory_port),
             res = do_v1_to_v2(ohttp_relay, directory, cert) => assert!(res.is_ok()),
             );
 
@@ -915,12 +915,13 @@ mod integration {
                 ))
         }
 
-        async fn reserve_port() -> u16 {
+        async fn reserve_port(who: &str) -> u16 {
             let mut reserved_ports = RESERVED_PORTS.lock().await;
             let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
             let port = listener.local_addr().unwrap().port();
+            println!("reserving {:?} by {}", &port, who);
             if reserved_ports.insert(port) {
-                println!("{:?}", &reserved_ports);
+                println!("reserved  {:?} by {}", &reserved_ports, who);
                 port
             } else {
                 panic!("PORT RESERVED!!!");

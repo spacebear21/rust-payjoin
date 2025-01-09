@@ -407,7 +407,7 @@ impl Display for WellKnownError {
 
 #[cfg(test)]
 mod tests {
-    use bitcoind::bitcoincore_rpc::jsonrpc::serde_json::json;
+    use corepc_node::serde_json::json;
 
     use super::*;
 

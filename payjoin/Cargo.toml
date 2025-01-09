@@ -39,7 +39,7 @@ url = "2.2.2"
 serde_json = "1.0.108"
 
 [dev-dependencies]
-bitcoind = { version = "0.36.0", features = ["0_21_2"] }
+corepc-node = { path = "../../corepc/node", features = ["28_0"] }
 http = "1"
 payjoin-directory = { path = "../payjoin-directory", features = ["_danger-local-https"] }
 ohttp-relay = { version = "0.0.9", features = ["_test-util"] }

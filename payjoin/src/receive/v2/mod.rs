@@ -317,6 +317,16 @@ impl MaybeInputsSeen {
     }
 }
 
+pub struct FailedPayjoin {
+    error: Error,
+    context: SessionContext,
+}
+
+impl FailedPayjoin {
+    #[cfg(feature = "v2")]
+    pub fn extract_v2_req(&mut self) -> Result<(Request, ohttp::ClientResponse), Error> { todo!() }
+}
+
 /// The receiver has not yet identified which outputs belong to the receiver.
 ///
 /// Only accept PSBTs that send us money.
@@ -332,9 +342,11 @@ impl OutputsUnknown {
     pub fn identify_receiver_outputs(
         self,
         is_receiver_output: impl Fn(&Script) -> Result<bool, Error>,
-    ) -> Result<WantsOutputs, Error> {
-        let inner = self.inner.identify_receiver_outputs(is_receiver_output)?;
-        Ok(WantsOutputs { v1: inner, context: self.context })
+    ) -> Result<WantsOutputs, FailedPayjoin> {
+        match self.inner.identify_receiver_outputs(is_receiver_output) {
+            Ok(inner) => return Ok(WantsOutputs { v1: inner, context: self.context }),
+            Err(error) => return Err(FailedPayjoin { error, context: self.context }),
+        };
     }
 }
 

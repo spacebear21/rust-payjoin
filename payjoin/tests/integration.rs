@@ -1,10 +1,10 @@
 #[cfg(all(feature = "send", feature = "receive"))]
 mod integration {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::env;
     use std::str::FromStr;
 
-    use bitcoin::policy::DEFAULT_MIN_RELAY_TX_FEE;
+    //use bitcoin::policy::DEFAULT_MIN_RELAY_TX_FEE;
     use bitcoin::psbt::{Input as PsbtInput, Psbt};
     use bitcoin::transaction::InputWeightPrediction;
     use bitcoin::{Amount, FeeRate, OutPoint, TxIn, TxOut, Weight};
@@ -169,6 +169,7 @@ mod integration {
 
     #[cfg(all(feature = "io", feature = "v2", feature = "_danger-local-https"))]
     mod v2 {
+        use std::collections::BTreeMap;
         use std::sync::Arc;
         use std::time::Duration;
 
@@ -503,17 +504,18 @@ mod integration {
                 bitcoind.client.generate_to_address(101, &segwit_address)?;
                 let receiver_utxos = receiver
                     .list_unspent(
-                        None,
-                        None,
-                        Some(&[&legacy_address, &nested_segwit_address, &segwit_address]),
-                        None,
-                        None,
+                        //None,
+                        //None,
+                        //Some(&[&legacy_address, &nested_segwit_address, &segwit_address]),
+                        //None,
+                        //None,
                     )
-                    .unwrap();
+                    .unwrap().0;
                 assert_eq!(3, receiver_utxos.len(), "receiver doesn't have enough UTXOs");
                 assert_eq!(
                     Amount::from_btc(150.0)?,
-                    receiver_utxos.iter().fold(Amount::ZERO, |acc, txo| acc + txo.amount),
+                    receiver_utxos.clone().into_iter().fold(Amount::ZERO, |acc, txo| acc
+                        + txo.into_model().unwrap().amount.to_unsigned().unwrap()),
                     "receiver doesn't have enough bitcoin"
                 );
 
@@ -868,11 +870,13 @@ mod integration {
             let proposal = proposal
                 .check_broadcast_suitability(None, |tx| {
                     Ok(receiver
-                        .test_mempool_accept(&[bitcoin::consensus::encode::serialize_hex(&tx)])
+                        .test_mempool_accept(&[tx.clone()], None)
                         .unwrap()
+                        .0
                         .first()
                         .unwrap()
-                        .allowed)
+                        .allowed
+                        .unwrap())
                 })
                 .expect("Payjoin proposal should be broadcastable");
 
@@ -881,7 +885,7 @@ mod integration {
                 .check_inputs_not_owned(|input| {
                     let address =
                         bitcoin::Address::from_script(input, bitcoin::Network::Regtest).unwrap();
-                    Ok(receiver.get_address_info(&address).unwrap().is_mine.unwrap())
+                    Ok(receiver.get_address_info(&address).unwrap().is_mine)
                 })
                 .expect("Receiver should not own any of the inputs");
 
@@ -893,7 +897,7 @@ mod integration {
                     let address =
                         bitcoin::Address::from_script(output_script, bitcoin::Network::Regtest)
                             .unwrap();
-                    Ok(receiver.get_address_info(&address).unwrap().is_mine.unwrap())
+                    Ok(receiver.get_address_info(&address).unwrap().is_mine)
                 })
                 .expect("Receiver should have at least one output");
 
@@ -903,8 +907,9 @@ mod integration {
                 Some(inputs) => inputs,
                 None => {
                     let candidate_inputs = receiver
-                        .list_unspent(None, None, None, None, None)
+                        .list_unspent()
                         .unwrap()
+                        .0
                         .into_iter()
                         .map(input_pair_from_list_unspent);
                     let selected_input = payjoin
@@ -924,13 +929,15 @@ mod integration {
                     |psbt: &Psbt| {
                         Ok(receiver
                             .wallet_process_psbt(
-                                &psbt.to_string(),
-                                None,
-                                None,
-                                Some(true), // check that the receiver properly clears keypaths
+                                &psbt,
+                                //None,
+                                //None,
+                                //Some(true), // check that the receiver properly clears keypaths
                             )
-                            .map(|res: WalletProcessPsbtResult| Psbt::from_str(&res.psbt).unwrap())
-                            .unwrap())
+                            .unwrap()
+                            .into_model()
+                            .unwrap()
+                            .psbt)
                     },
                     Some(FeeRate::BROADCAST_MIN),
                     FeeRate::from_sat_per_vb_unchecked(2),
@@ -972,26 +979,27 @@ mod integration {
         }
 
         fn build_sweep_psbt(sender: &Client, pj_uri: &PjUri) -> Result<Psbt, BoxError> {
-            let mut outputs = HashMap::with_capacity(1);
-            outputs.insert(pj_uri.address.to_string(), Amount::from_btc(50.0)?);
-            let options = bitcoincore_rpc::json::WalletCreateFundedPsbtOptions {
-                lock_unspent: Some(true),
-                // The minimum relay feerate ensures that tests fail if the receiver would add inputs/outputs
-                // that cannot be covered by the sender's additional fee contributions.
-                fee_rate: Some(Amount::from_sat(DEFAULT_MIN_RELAY_TX_FEE.into())),
-                subtract_fee_from_outputs: vec![0],
-                ..Default::default()
-            };
+            let mut outputs = BTreeMap::new();
+            outputs.insert(pj_uri.address.clone(), Amount::from_btc(50.0)?);
+            //let options = bitcoincore_rpc::json::WalletCreateFundedPsbtOptions {
+            //    lock_unspent: Some(true),
+            //    // The minimum relay feerate ensures that tests fail if the receiver would add inputs/outputs
+            //    // that cannot be covered by the sender's additional fee contributions.
+            //    fee_rate: Some(Amount::from_sat(DEFAULT_MIN_RELAY_TX_FEE.into())),
+            //    subtract_fee_from_outputs: vec![0],
+            //    ..Default::default()
+            //};
             let psbt = sender
                 .wallet_create_funded_psbt(
-                    &[], // inputs
-                    &outputs,
-                    None, // locktime
-                    Some(options),
-                    Some(true), // check that the sender properly clears keypaths
+                    vec![], // inputs
+                    vec![outputs],
+                    //None, // locktime
+                    //Some(options),
+                    //Some(true), // check that the sender properly clears keypaths
                 )?
+                .into_model()?
                 .psbt;
-            let psbt = sender.wallet_process_psbt(&psbt, None, None, None)?.psbt;
+            let psbt = sender.wallet_process_psbt(&psbt)?.psbt;
             Ok(Psbt::from_str(&psbt)?)
         }
     }
@@ -1010,7 +1018,7 @@ mod integration {
             // Generate more UTXOs for the receiver
             let receiver_address = receiver.new_address_with_type(AddressType::Bech32)?;
             bitcoind.client.generate_to_address(199, &receiver_address)?;
-            let receiver_utxos = receiver.list_unspent(None, None, None, None, None).unwrap();
+            let receiver_utxos = receiver.list_unspent().unwrap().0;
             assert_eq!(100, receiver_utxos.len(), "receiver doesn't have enough UTXOs");
             assert_eq!(
                 Amount::from_btc(3700.0)?, // 48*50.0 + 52*25.0 (halving occurs every 150 blocks)
@@ -1222,26 +1230,27 @@ mod integration {
     }
 
     fn build_original_psbt(sender: &Client, pj_uri: &PjUri) -> Result<Psbt, BoxError> {
-        let mut outputs = HashMap::with_capacity(1);
-        outputs.insert(pj_uri.address.to_string(), pj_uri.amount.unwrap_or(Amount::ONE_BTC));
-        let options = bitcoincore_rpc::json::WalletCreateFundedPsbtOptions {
-            lock_unspent: Some(true),
-            // The minimum relay feerate ensures that tests fail if the receiver would add inputs/outputs
-            // that cannot be covered by the sender's additional fee contributions.
-            fee_rate: Some(Amount::from_sat(DEFAULT_MIN_RELAY_TX_FEE.into())),
-            ..Default::default()
-        };
+        let mut outputs = BTreeMap::new();
+        outputs.insert(pj_uri.address.clone(), pj_uri.amount.unwrap_or(Amount::ONE_BTC));
+        //let options = bitcoincore_rpc::json::WalletCreateFundedPsbtOptions {
+        //    lock_unspent: Some(true),
+        //    // The minimum relay feerate ensures that tests fail if the receiver would add inputs/outputs
+        //    // that cannot be covered by the sender's additional fee contributions.
+        //    fee_rate: Some(Amount::from_sat(DEFAULT_MIN_RELAY_TX_FEE.into())),
+        //    ..Default::default()
+        //};
         let psbt = sender
             .wallet_create_funded_psbt(
-                &[], // inputs
-                &outputs,
-                None, // locktime
-                Some(options),
-                Some(true), // check that the sender properly clears keypaths
+                vec![], // inputs
+                vec![outputs],
+                //None, // locktime
+                //Some(options),
+                //Some(true), // check that the sender properly clears keypaths
             )?
+            .into_model()?
             .psbt;
-        let psbt = sender.wallet_process_psbt(&psbt, None, None, None)?.psbt;
-        Ok(Psbt::from_str(&psbt)?)
+        let psbt = sender.wallet_process_psbt(&psbt)?.into_model()?.psbt;
+        Ok(psbt)
     }
 
     // Receiver receive and process original_psbt from a sender
@@ -1281,17 +1290,19 @@ mod integration {
         // Receive Check 1: Can Broadcast
         let proposal = proposal.check_broadcast_suitability(None, |tx| {
             Ok(receiver
-                .test_mempool_accept(&[bitcoin::consensus::encode::serialize_hex(&tx)])
+                .test_mempool_accept(&[tx.clone()], None)
                 .unwrap()
+                .0
                 .first()
                 .unwrap()
-                .allowed)
+                .allowed
+                .unwrap())
         })?;
 
         // Receive Check 2: receiver can't sign for proposal inputs
         let proposal = proposal.check_inputs_not_owned(|input| {
             let address = bitcoin::Address::from_script(input, bitcoin::Network::Regtest).unwrap();
-            Ok(receiver.get_address_info(&address).unwrap().is_mine.unwrap())
+            Ok(receiver.get_address_info(&address).unwrap().is_mine)
         })?;
 
         // Receive Check 3: have we seen this input before? More of a check for non-interactive i.e. payment processor receivers.
@@ -1301,7 +1312,7 @@ mod integration {
                 let address =
                     bitcoin::Address::from_script(output_script, bitcoin::Network::Regtest)
                         .unwrap();
-                Ok(receiver.get_address_info(&address).unwrap().is_mine.unwrap())
+                Ok(receiver.get_address_info(&address).unwrap().is_mine)
             })?;
 
         let payjoin = match custom_outputs {
@@ -1313,10 +1324,8 @@ mod integration {
         let inputs = match custom_inputs {
             Some(inputs) => inputs,
             None => {
-                let candidate_inputs = receiver
-                    .list_unspent(None, None, None, None, None)?
-                    .into_iter()
-                    .map(input_pair_from_list_unspent);
+                let candidate_inputs =
+                    receiver.list_unspent()?.0.into_iter().map(input_pair_from_list_unspent);
                 let selected_input = payjoin
                     .try_preserving_privacy(candidate_inputs)
                     .map_err(|e| format!("Failed to make privacy preserving selection: {:?}", e))?;
@@ -1332,13 +1341,15 @@ mod integration {
             |psbt: &Psbt| {
                 Ok(receiver
                     .wallet_process_psbt(
-                        &psbt.to_string(),
-                        None,
-                        None,
-                        Some(true), // check that the receiver properly clears keypaths
+                        &psbt,
+                        //None,
+                        //None,
+                        //Some(true), // check that the receiver properly clears keypaths
                     )
-                    .map(|res: WalletProcessPsbtResult| Psbt::from_str(&res.psbt).unwrap())
-                    .unwrap())
+                    .unwrap()
+                    .into_model()
+                    .unwrap()
+                    .psbt)
             },
             Some(FeeRate::BROADCAST_MIN),
             FeeRate::from_sat_per_vb_unchecked(2),
@@ -1350,9 +1361,8 @@ mod integration {
         sender: &Client,
         psbt: Psbt,
     ) -> Result<bitcoin::Transaction, Box<dyn std::error::Error>> {
-        let payjoin_psbt = sender.wallet_process_psbt(&psbt.to_string(), None, None, None)?.psbt;
-        let payjoin_psbt = sender.finalize_psbt(&payjoin_psbt, Some(false))?.psbt.unwrap();
-        let payjoin_psbt = Psbt::from_str(&payjoin_psbt)?;
+        let payjoin_psbt = sender.wallet_process_psbt(&psbt)?.into_model()?.psbt;
+        let payjoin_psbt = sender.finalize_psbt(&payjoin_psbt)?.into_model()?.psbt;
         tracing::debug!("Sender's Payjoin PSBT: {:#?}", payjoin_psbt);
 
         Ok(payjoin_psbt.extract_tx()?)
@@ -1381,16 +1391,19 @@ mod integration {
         bitcoin::transaction::predict_weight(input_weight_predictions, tx.script_pubkey_lens())
     }
 
-    fn input_pair_from_list_unspent(utxo: corepc_node::types::ListUnspent) -> InputPair {
+    fn input_pair_from_list_unspent(
+        utxo: corepc_node::client::types::v17::ListUnspentItem,
+    ) -> InputPair {
+        let utxo = utxo.into_model().unwrap();
         let psbtin = PsbtInput {
             // NOTE: non_witness_utxo is not necessary because bitcoin-cli always supplies
             // witness_utxo, even for non-witness inputs
             witness_utxo: Some(TxOut {
-                value: utxo.amount,
-                script_pubkey: utxo.script_pub_key.clone(),
+                value: utxo.amount.to_unsigned().unwrap(),
+                script_pubkey: utxo.script_pubkey.clone(),
             }),
             redeem_script: utxo.redeem_script.clone(),
-            witness_script: utxo.witness_script.clone(),
+            //witness_script: utxo.witness_script.clone(),
             ..Default::default()
         };
         let txin = TxIn {

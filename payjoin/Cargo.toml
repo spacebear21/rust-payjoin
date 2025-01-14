@@ -23,6 +23,7 @@ v2 = ["bitcoin/rand", "bitcoin/serde", "hpke", "dep:http", "bhttp", "ohttp", "se
 #[doc = "Functions to fetch OHTTP keys via CONNECT proxy using reqwest. Enables `v2` since only `v2` uses OHTTP."]
 io = ["v2", "reqwest/rustls-tls"]
 _danger-local-https = ["reqwest/rustls-tls", "rustls"]
+_test_utils = ["payjoin-directory", "_danger-local-https", "tokio", "rcgen", "bitcoind", "dep:http", "tracing", "tracing-subscriber", "once_cell"]
 
 [dependencies]
 bitcoin = { version = "0.32.5", features = ["base64"] }
@@ -37,6 +38,15 @@ reqwest = { version = "0.12", default-features = false, optional = true }
 rustls = { version = "0.22.4", optional = true }
 url = "2.2.2"
 serde_json = "1.0.108"
+
+# Optional dependencies required by _test_utils feature
+payjoin-directory = { path = "../payjoin-directory",  optional = true}
+tokio = { version = "1.12.0",  optional = true }
+rcgen = { version = "0.11", optional = true }
+bitcoind = { version = "0.36.0", optional = true }
+tracing = { version = "0.1.40", optional = true}
+tracing-subscriber = { version = "0.3.17", optional = true }
+once_cell = { version = "1", optional = true }
 
 [dev-dependencies]
 bitcoind = { version = "0.36.0", features = ["0_21_2"] }

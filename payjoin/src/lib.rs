@@ -54,3 +54,6 @@ mod uri;
 pub use bitcoin::base64;
 pub use uri::{PjParseError, PjUri, Uri, UriExt};
 pub use url::{ParseError, Url};
+
+#[cfg(feature = "_test_utils")]
+pub mod test_utils;

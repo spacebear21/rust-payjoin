@@ -22,6 +22,7 @@ path = "src/main.rs"
 default = ["v1"]
 native-certs = ["reqwest/rustls-tls-native-roots"]
 _danger-local-https = ["rcgen", "reqwest/rustls-tls", "rustls", "hyper-rustls", "payjoin/_danger-local-https", "tokio-rustls"]
+_test_utils = ["payjoin/_test_utils"]
 v1 = ["hyper", "hyper-util", "http-body-util"]
 v2 = ["payjoin/v2", "payjoin/io"]
 

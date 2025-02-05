@@ -14,7 +14,7 @@ use payjoin::{bitcoin, PjUri};
 pub mod config;
 use crate::app::config::AppConfig;
 
-#[cfg(all(not(feature = "v2"), feature = "v1"))]
+#[cfg(feature = "v1")]
 pub(crate) mod v1;
 #[cfg(feature = "v2")]
 pub(crate) mod v2;

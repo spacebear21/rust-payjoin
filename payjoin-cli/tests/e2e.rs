@@ -17,13 +17,13 @@ mod e2e {
 
     const RECEIVE_SATS: &str = "54321";
 
-    #[cfg(not(feature = "v2"))]
+    #[cfg(feature = "v1")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn send_receive_payjoin() -> Result<(), BoxError> {
+    async fn send_receive_payjoin_v1() -> Result<(), BoxError> {
         let (bitcoind, _sender, _receiver) = init_bitcoind_sender_receiver(None, None)?;
         let temp_dir = env::temp_dir();
-        let receiver_db_path = temp_dir.join("receiver_db");
-        let sender_db_path = temp_dir.join("sender_db");
+        let receiver_db_path = temp_dir.join("receiver_db_v1");
+        let sender_db_path = temp_dir.join("sender_db_v1");
         let receiver_db_path_clone = receiver_db_path.clone();
         let sender_db_path_clone = sender_db_path.clone();
         let port = find_free_port()?;
@@ -139,7 +139,7 @@ mod e2e {
 
     #[cfg(feature = "v2")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn send_receive_payjoin() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_receive_payjoin_v2() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::path::PathBuf;
 
         use payjoin_test_utils::{init_tracing, TestServices};
@@ -150,8 +150,8 @@ mod e2e {
         init_tracing();
         let mut services = TestServices::initialize().await?;
         let temp_dir = env::temp_dir();
-        let receiver_db_path = temp_dir.join("receiver_db");
-        let sender_db_path = temp_dir.join("sender_db");
+        let receiver_db_path = temp_dir.join("receiver_db_v2");
+        let sender_db_path = temp_dir.join("sender_db_v2");
         let result = tokio::select! {
             res = services.take_ohttp_relay_handle() => Err(format!("Ohttp relay is long running: {:?}", res).into()),
             res = services.take_directory_handle() => Err(format!("Directory server is long running: {:?}", res).into()),

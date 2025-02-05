@@ -121,7 +121,8 @@ fn cli() -> ArgMatches {
             .help("The maximum effective fee rate the receiver is willing to pay (in sat/vB)")
             .value_parser(parse_fee_rate_in_sat_per_vb),
     );
-    #[cfg(not(feature = "v2"))]
+
+    #[cfg(feature = "v1")]
     {
         receive_cmd = receive_cmd.arg(
             Arg::new("port")

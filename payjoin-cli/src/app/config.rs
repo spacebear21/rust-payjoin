@@ -29,9 +29,9 @@ pub struct AppConfig {
     pub pj_directory: Url,
 
     // v1 receive-only
-    #[cfg(not(feature = "v2"))]
+    #[cfg(feature = "v1")]
     pub port: u16,
-    #[cfg(not(feature = "v2"))]
+    #[cfg(feature = "v1")]
     pub pj_endpoint: Url,
 }
 
@@ -80,7 +80,7 @@ impl AppConfig {
         let builder = match matches.subcommand() {
             Some(("send", _)) => builder,
             Some(("receive", matches)) => {
-                #[cfg(not(feature = "v2"))]
+                #[cfg(feature = "v1")]
                 let builder = {
                     let port = matches
                         .get_one::<String>("port")

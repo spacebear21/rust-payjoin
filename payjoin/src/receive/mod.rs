@@ -38,8 +38,9 @@ pub struct InputPair {
 }
 
 impl InputPair {
-    pub fn new(txin: &TxIn, psbtin: psbt::Input) -> Result<Self, PsbtInputError> {
-        let input_pair = Self { txin, psbtin };
+    pub fn new(txin: TxIn, psbtin: psbt::Input) -> Result<Self, PsbtInputError> {
+        let input_pair = Self { txin,
+            psbtin };
         let raw = InternalInputPair::from(&input_pair);
         raw.validate_utxo()?;
         let address_type = raw.address_type().map_err(InternalPsbtInputError::AddressType)?;

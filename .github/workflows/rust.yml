@@ -43,14 +43,22 @@ jobs:
     steps:
       - name: "Checkout repo"
         uses: actions/checkout@v4
+        with:
+          # checkout full tree
+          fetch-depth: 0
       - name: "Install nightly toolchain"
         uses: dtolnay/rust-toolchain@nightly
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
       - name: "Install clippy"
         run: rustup component add clippy --toolchain nightly-x86_64-unknown-linux-gnu
-      - name: "Run code linting"
-        run: bash contrib/lint.sh
+      - name: "Run code linting on all commits"
+        run: |
+          for commit in $(git rev-list master..${{ github.sha }}); do
+            git checkout $commit
+            echo "checked out $commit"
+            bash contrib/lint.sh
+          done
       - name: "Run documentation linting"
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --document-private-items
 

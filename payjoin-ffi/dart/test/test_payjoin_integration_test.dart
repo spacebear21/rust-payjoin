@@ -98,7 +98,7 @@ class IsScriptOwnedCallback implements payjoin.IsScriptOwned {
       final decoded = jsonDecode(result);
       return decoded["ismone"] == true;
     } catch (e) {
-      print("An error occured: $e");
+      print("An error occurred: $e");
       return false;
     }
   }

@@ -153,18 +153,21 @@ bitcoin.Psbt build_sweep_psbt(payjoin.RpcClient sender, payjoin.PjUri pj_uri) {
 }
 
 List<payjoin.InputPair> get_inputs(payjoin.RpcClient rpc_connection) {
-  var utxos = jsonDecode(rpc_connection.call("listunspent", []));
+  var utxos = jsonDecode(rpc_connection.call("listunspent", [null]));
   List<payjoin.InputPair> inputs = [];
   for (var utxo in utxos) {
-    var txin = bitcoin.TxIn._(previous_output);
+    var txin = bitcoin.TxIn.inner(
+        bitcoin.OutPoint.inner(utxo["txid"], utxo["vout"]),
+        bitcoin.Script(Uint8List.fromList([])),
+        0, []);
     var raw_tx = jsonDecode(rpc_connection.call("gettransaction",
         [jsonEncode(utxo["txid"]), jsonEncode(true), jsonEncode(true)]));
     var prev_out = raw_tx["decoded"]["vout"][utxo["vout"]];
     var prev_spk = bitcoin.Script(Uint8List.fromList(
         hex.decode(prev_out["ScriptPubkey"]["hex"].toString())));
     var prev_amount = bitcoin.Amount.fromBtc(prev_out["value"]);
-    var tx_out = bitcoin.TxOut._(prev_amount, prev_spk);
-    var psbt_in = payjoin.PsbtInput._(tx_out, null, null);
+    var tx_out = bitcoin.TxOut.inner(prev_amount, prev_spk);
+    var psbt_in = payjoin.PsbtInput.inner(tx_out, null, null);
     inputs.add(payjoin.InputPair(txin, psbt_in));
   }
 
@@ -287,8 +290,12 @@ Future<payjoin.ReceiveSession?> process_receiver_proposal(
 void main() {
   group('Test integration', () {
     test('Test integration v2 to v2', () async {
+      env = payjoin.initBitcoindSenderReceiver();
+      bitcoind = env.getBitcoind();
+      receiver = env.getReceiver();
+      sender = env.getSender();
       var receiver_address = bitcoin.Address(
-          jsonEncode(receiver.call("getnewaddress", [])),
+          jsonEncode(receiver.call("getnewaddress", [null])),
           bitcoin.Network.regtest);
       var services = payjoin.TestServices.initialize();
 
@@ -384,10 +391,10 @@ void main() {
       expect(payjoin_tx.input().length, 2);
       expect(payjoin_tx.output().length, 1);
       expect(
-          jsonDecode(receiver.call("getbalances", []))["mine"]
+          jsonDecode(receiver.call("getbalances", [null]))["mine"]
               ["untrusted_pending"],
           100 - network_fees);
-      expect(sender.call("getbalance", []), 0);
+      expect(sender.call("getbalance", [null]), 0);
     });
   });
 }

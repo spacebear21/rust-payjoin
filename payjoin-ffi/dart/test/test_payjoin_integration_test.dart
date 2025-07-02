@@ -340,14 +340,15 @@ void main() {
       expect(payjoin_proposal, isNotNull);
       expect(payjoin_proposal, isA<payjoin.PayjoinProposal>());
 
-      payjoin.Initialized payjoin_proposal_inner = payjoin_proposal;
+      payjoin.PayjoinProposal proposal =
+          payjoin_proposal as payjoin.PayjoinProposal;
       payjoin.RequestResponse request_response =
-          payjoin_proposal_inner.extractReq(ohttp_relay.toString());
+          proposal.extractReq(ohttp_relay.toString());
       var fallback_response = await agent.post(
           Uri.https(request_response.request.url.toString()),
           headers: {"Content-Type": request_response.request.contentType},
           body: request_response.request.body);
-      payjoin_proposal_inner.processRes(
+      proposal.processRes(
           Uint8List.fromList(utf8.encode(fallback_response.body)),
           request_response.clientResponse);
 

@@ -298,7 +298,7 @@ void main() {
       var services = payjoin.TestServices.initialize();
 
       services.waitForServicesReady();
-      var directory = services.directoryUrl();
+      var directory = services.directoryUrl().toString();
       var ohttp_keys = services.fetchOhttpKeys();
       var ohttp_relay = services.ohttpRelayUrl();
       var agent = http.Client();

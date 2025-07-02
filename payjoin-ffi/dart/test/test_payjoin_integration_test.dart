@@ -156,18 +156,16 @@ List<payjoin.InputPair> get_inputs(payjoin.RpcClient rpc_connection) {
   var utxos = jsonDecode(rpc_connection.call("listunspent", [null]));
   List<payjoin.InputPair> inputs = [];
   for (var utxo in utxos) {
-    var txin = bitcoin.TxIn.inner(
-        bitcoin.OutPoint.inner(utxo["txid"], utxo["vout"]),
-        bitcoin.Script(Uint8List.fromList([])),
-        0, []);
+    var txin = bitcoin.TxIn(bitcoin.OutPoint(utxo["txid"], utxo["vout"]),
+        bitcoin.Script(Uint8List.fromList([])), 0, []);
     var raw_tx = jsonDecode(rpc_connection.call("gettransaction",
         [jsonEncode(utxo["txid"]), jsonEncode(true), jsonEncode(true)]));
     var prev_out = raw_tx["decoded"]["vout"][utxo["vout"]];
     var prev_spk = bitcoin.Script(Uint8List.fromList(
         hex.decode(prev_out["ScriptPubkey"]["hex"].toString())));
     var prev_amount = bitcoin.Amount.fromBtc(prev_out["value"]);
-    var tx_out = bitcoin.TxOut.inner(prev_amount, prev_spk);
-    var psbt_in = payjoin.PsbtInput.inner(tx_out, null, null);
+    var tx_out = bitcoin.TxOut(prev_amount, prev_spk);
+    var psbt_in = payjoin.PsbtInput(tx_out, null, null);
     inputs.add(payjoin.InputPair(txin, psbt_in));
   }
 

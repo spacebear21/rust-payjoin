@@ -128,9 +128,12 @@ class ProcessPsbtCallback implements payjoin.ProcessPsbt {
 }
 
 payjoin.Initialized create_receiver_context(
-    address, directory, ohttp_keys, expiry, persister) {
+    bitcoin.Address address,
+    payjoin.Url directory,
+    payjoin.OhttpKeys ohttp_keys,
+    InMemoryReceiverPersister persister) {
   var receiver = payjoin.UninitializedReceiver()
-      .createSession(address, directory, ohttp_keys, null)
+      .createSession(address, directory.toString(), ohttp_keys, 600)
       .save(persister);
   return receiver;
 }
@@ -302,13 +305,16 @@ void main() {
       var ohttp_keys = services.fetchOhttpKeys();
       var ohttp_relay = services.ohttpRelayUrl();
       var agent = http.Client();
+      print("Gets here: 1");
 
       // **********************
       // Inside the Receiver:
       var recv_persister = InMemoryReceiverPersister("1");
       var sender_persister = InMemorySenderPersister("1");
+      print("Gets here: 2");
       var session = create_receiver_context(
-          receiver_address, directory, ohttp_keys, null, recv_persister);
+          receiver_address, directory, ohttp_keys, recv_persister);
+      print("Gets here: 3");
       // var process_response =
       //     await process_receiver_proposal(session, recv_persister, ohttp_relay);
       // expect(process_response, isNull);
@@ -316,12 +322,14 @@ void main() {
       // **********************
       // Inside the Sender:
       // Create a funded PSBT (not broadcasted) to address with amount given in the pj_uri
+      print("Gets here: 4");
       var pj_uri = session.pjUri();
       var psbt = build_sweep_psbt(sender, pj_uri);
       payjoin.WithReplyKey req_ctx =
           payjoin.SenderBuilder(psbt.toString(), pj_uri)
               .buildRecommended(1000)
               .save(sender_persister);
+      print("Gets here: 5");
       payjoin.RequestV2PostContext request =
           req_ctx.extractV2(ohttp_relay.toString());
       var response = await agent.post(Uri.https(request.request.url.toString()),

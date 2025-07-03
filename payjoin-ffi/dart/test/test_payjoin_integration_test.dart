@@ -153,7 +153,7 @@ bitcoin.Psbt build_sweep_psbt(payjoin.RpcClient sender, payjoin.PjUri pj_uri) {
 }
 
 List<payjoin.InputPair> get_inputs(payjoin.RpcClient rpc_connection) {
-  var utxos = jsonDecode(rpc_connection.call("listunspent", [null]));
+  var utxos = jsonDecode(rpc_connection.call("listunspent", []));
   List<payjoin.InputPair> inputs = [];
   for (var utxo in utxos) {
     var txin = bitcoin.TxIn(bitcoin.OutPoint(utxo["txid"], utxo["vout"]),
@@ -293,7 +293,7 @@ void main() {
       receiver = env.getReceiver();
       sender = env.getSender();
       var receiver_address = bitcoin.Address(
-          jsonEncode(receiver.call("getnewaddress", [null])),
+          jsonEncode(receiver.call("getnewaddress", [])),
           bitcoin.Network.regtest);
       var services = payjoin.TestServices.initialize();
 
@@ -375,7 +375,7 @@ void main() {
       print("checked_payjoin_proposal: $checked_payjoin_proposal_psbt");
       expect(checked_payjoin_proposal_psbt, isNotNull);
       var payjoin_psbt = jsonDecode(sender.call("walletprocesspsbt",
-          [checked_payjoin_proposal_psbt?.serializeBase64()]))["psbt"];
+          [checked_payjoin_proposal_psbt!.serializeBase64()]))["psbt"];
       var final_psbt = jsonDecode(sender
           .call("finalizepsbt", [payjoin_psbt, jsonEncode(false)]))["psbt"];
       var payjoin_tx = bitcoin.Psbt.deserializeBase64(final_psbt).extractTx();
@@ -389,10 +389,10 @@ void main() {
       expect(payjoin_tx.input().length, 2);
       expect(payjoin_tx.output().length, 1);
       expect(
-          jsonDecode(receiver.call("getbalances", [null]))["mine"]
+          jsonDecode(receiver.call("getbalances", []))["mine"]
               ["untrusted_pending"],
           100 - network_fees);
-      expect(sender.call("getbalance", [null]), 0);
+      expect(sender.call("getbalance", []), 0);
     });
   });
 }

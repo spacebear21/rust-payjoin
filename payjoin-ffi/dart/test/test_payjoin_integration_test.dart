@@ -243,8 +243,8 @@ Future<payjoin.ReceiveSession?> retrieve_receiver_proposal(
     InMemoryReceiverPersister recv_persister,
     payjoin.Url ohttp_relay) async {
   var agent = http.Client();
-  var request = receiver.extractReq(ohttp_relay.toString());
-  var response = await agent.post(Uri.https(request.request.url.toString()),
+  var request = receiver.extractReq(ohttp_relay.asString());
+  var response = await agent.post(Uri.https(request.request.url.asString()),
       headers: {"Content-Type": request.request.contentType});
   var res = receiver
       .processRes(Uint8List.fromList(utf8.encode(response.body)),
@@ -319,7 +319,7 @@ void main() {
       var services = payjoin.TestServices.initialize();
 
       services.waitForServicesReady();
-      var directory = services.directoryUrl().toString();
+      var directory = services.directoryUrl().asString();
       var ohttp_keys = services.fetchOhttpKeys();
       var ohttp_relay = services.ohttpRelayUrl();
       var agent = http.Client();
@@ -344,8 +344,8 @@ void main() {
               .buildRecommended(1000)
               .save(sender_persister);
       payjoin.RequestV2PostContext request =
-          req_ctx.extractV2(ohttp_relay.toString());
-      var response = await agent.post(Uri.https(request.request.url.toString()),
+          req_ctx.extractV2(ohttp_relay.asString());
+      var response = await agent.post(Uri.https(request.request.url.asString()),
           headers: {"Content-Type": request.request.contentType},
           body: request.request.body);
       payjoin.V2GetContext send_ctx = req_ctx
@@ -369,9 +369,9 @@ void main() {
       payjoin.PayjoinProposal proposal =
           payjoin_proposal as payjoin.PayjoinProposal;
       payjoin.RequestResponse request_response =
-          proposal.extractReq(ohttp_relay.toString());
+          proposal.extractReq(ohttp_relay.asString());
       var fallback_response = await agent.post(
-          Uri.https(request_response.request.url.toString()),
+          Uri.https(request_response.request.url.asString()),
           headers: {"Content-Type": request_response.request.contentType},
           body: request_response.request.body);
       proposal.processRes(
@@ -383,9 +383,9 @@ void main() {
       // Sender checks, isngs, finalizes, extracts, and broadcasts
       // Replay post fallback to get the response
       payjoin.RequestOhttpContext ohttp_context_request =
-          send_ctx.extractReq(ohttp_relay.toString());
+          send_ctx.extractReq(ohttp_relay.asString());
       var final_response = await agent.post(
-          Uri.https(ohttp_context_request.request.url.toString()),
+          Uri.https(ohttp_context_request.request.url.asString()),
           headers: {"Content-Type": ohttp_context_request.request.contentType},
           body: ohttp_context_request.request.body);
       var checked_payjoin_proposal_psbt = send_ctx

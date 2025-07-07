@@ -138,7 +138,7 @@ payjoin.Initialized create_receiver_context(
   return receiver;
 }
 
-bitcoin.Psbt build_sweep_psbt(payjoin.RpcClient sender, payjoin.PjUri pj_uri) {
+String build_sweep_psbt(payjoin.RpcClient sender, payjoin.PjUri pj_uri) {
   var outputs = <String, dynamic>{};
   outputs[pj_uri.address()] = 50;
   var psbt = jsonDecode(sender.call("walletcreatefundedpsbt", [
@@ -150,7 +150,7 @@ bitcoin.Psbt build_sweep_psbt(payjoin.RpcClient sender, payjoin.PjUri pj_uri) {
       "fee_rate": 10,
       "subtract_fee_from_outputs": [0]
     })
-  ]));
+  ]))["psbt"];
   return jsonDecode(sender.call("walletprocesspsbt",
       [psbt, jsonEncode(true), jsonEncode("ALL"), jsonEncode(false)]))["psbt"];
 }
@@ -339,10 +339,9 @@ void main() {
       // Create a funded PSBT (not broadcasted) to address with amount given in the pj_uri
       var pj_uri = session.pjUri();
       var psbt = build_sweep_psbt(sender, pj_uri);
-      payjoin.WithReplyKey req_ctx =
-          payjoin.SenderBuilder(psbt.toString(), pj_uri)
-              .buildRecommended(1000)
-              .save(sender_persister);
+      payjoin.WithReplyKey req_ctx = payjoin.SenderBuilder(psbt, pj_uri)
+          .buildRecommended(1000)
+          .save(sender_persister);
       payjoin.RequestV2PostContext request =
           req_ctx.extractV2(ohttp_relay.asString());
       var response = await agent.post(Uri.https(request.request.url.asString()),

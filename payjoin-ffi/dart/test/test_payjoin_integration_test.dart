@@ -244,7 +244,7 @@ Future<payjoin.ReceiveSession?> retrieve_receiver_proposal(
     payjoin.Url ohttp_relay) async {
   var agent = http.Client();
   var request = receiver.extractReq(ohttp_relay.asString());
-  var response = await agent.post(Uri.https(request.request.url.asString()),
+  var response = await agent.post(Uri.parse(request.request.url.asString()),
       headers: {"Content-Type": request.request.contentType});
   var res = receiver
       .processRes(Uint8List.fromList(utf8.encode(response.body)),
@@ -344,7 +344,7 @@ void main() {
           .save(sender_persister);
       payjoin.RequestV2PostContext request =
           req_ctx.extractV2(ohttp_relay.asString());
-      var response = await agent.post(Uri.https(request.request.url.asString()),
+      var response = await agent.post(Uri.parse(request.request.url.asString()),
           headers: {"Content-Type": request.request.contentType},
           body: request.request.body);
       payjoin.V2GetContext send_ctx = req_ctx
@@ -370,7 +370,7 @@ void main() {
       payjoin.RequestResponse request_response =
           proposal.extractReq(ohttp_relay.asString());
       var fallback_response = await agent.post(
-          Uri.https(request_response.request.url.asString()),
+          Uri.parse(request_response.request.url.asString()),
           headers: {"Content-Type": request_response.request.contentType},
           body: request_response.request.body);
       proposal.processRes(
@@ -384,7 +384,7 @@ void main() {
       payjoin.RequestOhttpContext ohttp_context_request =
           send_ctx.extractReq(ohttp_relay.asString());
       var final_response = await agent.post(
-          Uri.https(ohttp_context_request.request.url.asString()),
+          Uri.parse(ohttp_context_request.request.url.asString()),
           headers: {"Content-Type": ohttp_context_request.request.contentType},
           body: ohttp_context_request.request.body);
       var checked_payjoin_proposal_psbt = send_ctx

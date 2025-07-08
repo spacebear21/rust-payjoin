@@ -245,10 +245,10 @@ Future<payjoin.ReceiveSession?> retrieve_receiver_proposal(
   var agent = http.Client();
   var request = receiver.extractReq(ohttp_relay.asString());
   var response = await agent.post(Uri.parse(request.request.url.asString()),
-      headers: {"Content-Type": request.request.contentType});
+      headers: {"Content-Type": request.request.contentType},
+      body: request.request.body);
   var res = receiver
-      .processRes(Uint8List.fromList(utf8.encode(response.body)),
-          request.clientResponse)
+      .processRes(response.bodyBytes, request.clientResponse)
       .save(recv_persister);
   if (res.isNone()) {
     return null;
@@ -262,45 +262,38 @@ Future<payjoin.ReceiveSession?> process_receiver_proposal(
     payjoin.ReceiveSession receiver,
     InMemoryReceiverPersister recv_persister,
     payjoin.Url ohttp_relay) async {
-  if (receiver is payjoin.Initialized) {
+  if (receiver is payjoin.InitializedReceiveSession) {
     var res = await retrieve_receiver_proposal(
-        receiver as payjoin.Initialized, recv_persister, ohttp_relay);
+        receiver.inner, recv_persister, ohttp_relay);
     if (res == null) {
       return null;
     }
     return res;
   }
 
-  if (receiver is payjoin.UncheckedProposal) {
-    return await process_unchecked_proposal(
-        receiver as payjoin.UncheckedProposal, recv_persister);
+  if (receiver is payjoin.UncheckedProposalReceiveSession) {
+    return await process_unchecked_proposal(receiver.inner, recv_persister);
   }
-  if (receiver is payjoin.MaybeInputsOwned) {
-    return await process_maybe_inputs_owned(
-        receiver as payjoin.MaybeInputsOwned, recv_persister);
+  if (receiver is payjoin.MaybeInputsOwnedReceiveSession) {
+    return await process_maybe_inputs_owned(receiver.inner, recv_persister);
   }
-  if (receiver is payjoin.MaybeInputsSeen) {
-    return await process_maybe_inputs_seen(
-        receiver as payjoin.MaybeInputsSeen, recv_persister);
+  if (receiver is payjoin.MaybeInputsSeenReceiveSession) {
+    return await process_maybe_inputs_seen(receiver.inner, recv_persister);
   }
-  if (receiver is payjoin.OutputsUnknown) {
-    return await process_outputs_unknown(
-        receiver as payjoin.OutputsUnknown, recv_persister);
+  if (receiver is payjoin.OutputsUnknownReceiveSession) {
+    return await process_outputs_unknown(receiver.inner, recv_persister);
   }
-  if (receiver is payjoin.WantsOutputs) {
-    return await process_wants_outputs(
-        receiver as payjoin.WantsOutputs, recv_persister);
+  if (receiver is payjoin.WantsOutputsReceiveSession) {
+    return await process_wants_outputs(receiver.inner, recv_persister);
   }
-  if (receiver is payjoin.WantsInputs) {
-    return await process_wants_inputs(
-        receiver as payjoin.WantsInputs, recv_persister);
+  if (receiver is payjoin.WantsInputsReceiveSession) {
+    return await process_wants_inputs(receiver.inner, recv_persister);
   }
-  if (receiver is payjoin.ProvisionalProposal) {
-    return await process_provisional_proposal(
-        receiver as payjoin.ProvisionalProposal, recv_persister);
+  if (receiver is payjoin.ProvisionalProposalReceiveSession) {
+    return await process_provisional_proposal(receiver.inner, recv_persister);
   }
-  if (receiver is payjoin.PayjoinProposal) {
-    return receiver as payjoin.PayjoinProposalReceiveSession;
+  if (receiver is payjoin.PayjoinProposalReceiveSession) {
+    return receiver;
   }
 
   throw Exception("Unknown receiver state: $receiver");
@@ -330,9 +323,11 @@ void main() {
       var sender_persister = InMemorySenderPersister("1");
       var session = create_receiver_context(
           receiver_address, directory, ohttp_keys, recv_persister);
-      // var process_response = await process_receiver_proposal(
-      // session as payjoin.ReceiveSession, recv_persister, ohttp_relay);
-      // expect(process_response, isNull);
+      var process_response = await process_receiver_proposal(
+          payjoin.InitializedReceiveSession(session),
+          recv_persister,
+          ohttp_relay);
+      expect(process_response, isNull);
 
       // **********************
       // Inside the Sender:

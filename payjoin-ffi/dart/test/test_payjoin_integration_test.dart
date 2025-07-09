@@ -343,8 +343,7 @@ void main() {
           headers: {"Content-Type": request.request.contentType},
           body: request.request.body);
       payjoin.V2GetContext send_ctx = req_ctx
-          .processResponse(
-              Uint8List.fromList(utf8.encode(response.body)), request.context)
+          .processResponse(response.bodyBytes, request.context)
           .save(sender_persister);
       // POST Original PSBT
 
@@ -369,8 +368,7 @@ void main() {
           headers: {"Content-Type": request_response.request.contentType},
           body: request_response.request.body);
       proposal.processRes(
-          Uint8List.fromList(utf8.encode(fallback_response.body)),
-          request_response.clientResponse);
+          fallback_response.bodyBytes, request_response.clientResponse);
 
       // **********************
       // Inside the Sender:
@@ -383,8 +381,8 @@ void main() {
           headers: {"Content-Type": ohttp_context_request.request.contentType},
           body: ohttp_context_request.request.body);
       var checked_payjoin_proposal_psbt = send_ctx
-          .processResponse(Uint8List.fromList(utf8.encode(final_response.body)),
-              ohttp_context_request.ohttpCtx)
+          .processResponse(
+              final_response.bodyBytes, ohttp_context_request.ohttpCtx)
           .save(sender_persister)
           .success();
       print("checked_payjoin_proposal: $checked_payjoin_proposal_psbt");

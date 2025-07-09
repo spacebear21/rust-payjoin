@@ -354,10 +354,10 @@ void main() {
               recv_persister,
               ohttp_relay);
       expect(payjoin_proposal, isNotNull);
-      expect(payjoin_proposal, isA<payjoin.PayjoinProposal>());
+      expect(payjoin_proposal, isA<payjoin.PayjoinProposalReceiveSession>());
 
       payjoin.PayjoinProposal proposal =
-          payjoin_proposal as payjoin.PayjoinProposal;
+          (payjoin_proposal as payjoin.PayjoinProposalReceiveSession).inner;
       payjoin.RequestResponse request_response =
           proposal.extractReq(ohttp_relay.asString());
       var fallback_response = await agent.post(
@@ -382,7 +382,6 @@ void main() {
               final_response.bodyBytes, ohttp_context_request.ohttpCtx)
           .save(sender_persister)
           .success();
-      print("checked_payjoin_proposal: $checked_payjoin_proposal_psbt");
       expect(checked_payjoin_proposal_psbt, isNotNull);
       var payjoin_psbt = jsonDecode(sender.call("walletprocesspsbt",
           [checked_payjoin_proposal_psbt!.serializeBase64()]))["psbt"];
@@ -402,7 +401,7 @@ void main() {
           jsonDecode(receiver.call("getbalances", []))["mine"]
               ["untrusted_pending"],
           100 - network_fees);
-      expect(sender.call("getbalance", []), 0);
+      expect(jsonDecode(sender.call("getbalance", [])), 0.0);
     });
   });
 }

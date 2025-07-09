@@ -69,7 +69,7 @@ class MempoolAcceptanceCallback implements payjoin.CanBroadcast {
   bool callback(Uint8List tx) {
     try {
       final hexTx = bytesToHex(tx);
-      final resultJson = connection.call("testmempoolaccept", ['[$hexTx]']);
+      final resultJson = connection.call("testmempoolaccept", ['["$hexTx"]']);
       final decoded = jsonDecode(resultJson);
       return decoded[0]['allowed'] == true;
     } catch (e) {
@@ -94,9 +94,11 @@ class IsScriptOwnedCallback implements payjoin.IsScriptOwned {
       final scriptObj = bitcoin.Script(script);
       final address =
           bitcoin.Address.fromScript(scriptObj, bitcoin.Network.regtest);
-      final result = connection.call("getaddressinfo", [address.toString()]);
+      // This is a hack due to toString() not being exposed by dart FFI
+      final address_str = address.toQrUri().split(":")[1];
+      final result = connection.call("getaddressinfo", [address_str]);
       final decoded = jsonDecode(result);
-      return decoded["ismone"] == true;
+      return decoded["ismine"] == true;
     } catch (e) {
       print("An error occurred: $e");
       return false;
@@ -161,13 +163,8 @@ List<payjoin.InputPair> get_inputs(payjoin.RpcClient rpc_connection) {
   for (var utxo in utxos) {
     var txin = bitcoin.TxIn(bitcoin.OutPoint(utxo["txid"], utxo["vout"]),
         bitcoin.Script(Uint8List.fromList([])), 0, []);
-    var raw_tx = jsonDecode(rpc_connection.call("gettransaction",
-        [jsonEncode(utxo["txid"]), jsonEncode(true), jsonEncode(true)]));
-    var prev_out = raw_tx["decoded"]["vout"][utxo["vout"]];
-    var prev_spk = bitcoin.Script(Uint8List.fromList(
-        hex.decode(prev_out["ScriptPubkey"]["hex"].toString())));
-    var prev_amount = bitcoin.Amount.fromBtc(prev_out["value"]);
-    var tx_out = bitcoin.TxOut(prev_amount, prev_spk);
+    var tx_out = bitcoin.TxOut(bitcoin.Amount.fromBtc(utxo["amount"]),
+        bitcoin.Script(Uint8List.fromList(hex.decode(utxo["scriptPubKey"]))));
     var psbt_in = payjoin.PsbtInput(tx_out, null, null);
     inputs.add(payjoin.InputPair(txin, psbt_in));
   }

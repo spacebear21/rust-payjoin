@@ -940,7 +940,7 @@ impl Receiver<WantsFeeRange> {
             Receiver {
                 state: ProvisionalProposal {
                     psbt_context,
-                    session_context: self.state.session_context.clone(),
+                    session_context: self.state.session_context,
                 },
             },
         )

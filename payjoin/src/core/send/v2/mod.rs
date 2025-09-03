@@ -281,7 +281,7 @@ impl Sender<WithReplyKey> {
             self.psbt_ctx.fee_contribution,
             self.psbt_ctx.min_fee_rate,
         )?;
-        let base_url = self.pj_param.endpoint().clone();
+        let base_url = self.pj_param.endpoint();
         let mut ohttp_keys = self.pj_param.ohttp_keys().clone();
         let (request, ohttp_ctx) = extract_request(
             ohttp_relay,
@@ -339,7 +339,7 @@ impl Sender<WithReplyKey> {
     }
 
     /// The endpoint in the Payjoin URI
-    pub fn endpoint(&self) -> Url { self.pj_param.endpoint().clone() }
+    pub fn endpoint(&self) -> Url { self.pj_param.endpoint() }
 
     pub(crate) fn apply_v2_get_context(self, v2_get_context: V2GetContext) -> SendSession {
         SendSession::V2GetContext(Sender { state: v2_get_context })
@@ -426,7 +426,6 @@ impl Sender<V2GetContext> {
         let mailbox: ShortId = hash.into();
         let url = self
             .endpoint()
-            .clone()
             .join(&mailbox.to_string())
             .map_err(|e| InternalCreateRequestError::Url(e.into()))?;
         let body = encrypt_message_a(

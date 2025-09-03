@@ -49,7 +49,7 @@ impl SenderBuilder {
     /// to create a [`Sender`]
     pub fn new(psbt: Psbt, uri: PjUri) -> Self {
         Self {
-            endpoint: uri.extras.pj_param.endpoint().clone(),
+            endpoint: uri.extras.pj_param.endpoint(),
             // Adopt the output substitution preference from the URI
             output_substitution: uri.extras.output_substitution,
             psbt_ctx_builder: PsbtContextBuilder::new(
@@ -71,7 +71,7 @@ impl SenderBuilder {
         amount: Option<Amount>,
     ) -> Self {
         Self {
-            endpoint: pj_param.endpoint().clone(),
+            endpoint: pj_param.endpoint(),
             // Default to enabled output substitution for v1 when not specified via URI
             output_substitution: OutputSubstitution::Enabled,
             psbt_ctx_builder: PsbtContextBuilder::new(psbt, address.script_pubkey(), amount),

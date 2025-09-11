@@ -5,10 +5,9 @@ use payjoin::bitcoin::consensus::encode::serialize_hex;
 use payjoin::bitcoin::{Amount, FeeRate};
 use payjoin::persist::OptionalTransitionOutcome;
 use payjoin::receive::v2::{
-    process_err_res, replay_event_log as replay_receiver_event_log, Initialized, MaybeInputsOwned,
+    replay_event_log as replay_receiver_event_log, HasError, Initialized, MaybeInputsOwned,
     MaybeInputsSeen, OutputsUnknown, PayjoinProposal, ProvisionalProposal, ReceiveSession,
-    Receiver, ReceiverBuilder, SessionHistory, UncheckedOriginalPayload, WantsFeeRange,
-    WantsInputs, WantsOutputs,
+    Receiver, ReceiverBuilder, UncheckedOriginalPayload, WantsFeeRange, WantsInputs, WantsOutputs,
 };
 use payjoin::send::v2::{
     replay_event_log as replay_sender_event_log, SendSession, Sender, SenderBuilder, V2GetContext,
@@ -352,25 +351,12 @@ impl App {
                     self.finalize_proposal(proposal, persister).await,
                 ReceiveSession::PayjoinProposal(proposal) =>
                     self.send_payjoin_proposal(proposal, persister).await,
+                ReceiveSession::HasError(error) => self.handle_error(error, persister).await,
                 ReceiveSession::TerminalFailure =>
                     return Err(anyhow!("Terminal receiver session")),
             }
         };
-
-        match res {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let (_, session_history) = replay_receiver_event_log(persister)?;
-                let pj_uri = match session_history.pj_uri() {
-                    Some(uri) => Some(uri.extras.endpoint().clone()),
-                    None => None,
-                };
-                let ohttp_relay = self.unwrap_relay_or_else_fetch(pj_uri).await?;
-                self.handle_recoverable_error(&ohttp_relay, &session_history).await?;
-
-                Err(e)
-            }
-        }
+        res
     }
 
     #[allow(clippy::incompatible_msrv)]
@@ -536,20 +522,14 @@ impl App {
         Ok(ohttp_relay)
     }
 
-    /// Handle request error by sending an error response over the directory
-    async fn handle_recoverable_error(
+    /// Handle error by attempting to send an error response over the directory
+    async fn handle_error(
         &self,
-        ohttp_relay: &payjoin::Url,
-        session_history: &SessionHistory,
+        session: Receiver<HasError>,
+        persister: &ReceiverPersister,
     ) -> Result<()> {
-        let e = match session_history.terminal_error() {
-            Some(e) => e,
-            _ => return Ok(()),
-        };
-        let (err_req, err_ctx) = session_history
-            .extract_err_req(ohttp_relay)?
-            .expect("If JsonReply is Some, then err_req and err_ctx should be Some");
-        let to_return = anyhow!("Replied with error: {}", e.to_json().to_string());
+        let (err_req, err_ctx) =
+            session.create_error_request(&self.unwrap_relay_or_else_fetch(None).await?)?;
 
         let err_response = match self.post_request(err_req).await {
             Ok(response) => response,
@@ -561,11 +541,11 @@ impl App {
             Err(e) => return Err(anyhow!("Failed to get error response bytes: {}", e)),
         };
 
-        if let Err(e) = process_err_res(&err_bytes, err_ctx) {
+        if let Err(e) = session.process_error_response(&err_bytes, err_ctx).save(persister) {
             return Err(anyhow!("Failed to process error response: {}", e));
         }
 
-        Err(to_return)
+        Ok(())
     }
 
     async fn post_request(&self, req: payjoin::Request) -> Result<reqwest::Response> {

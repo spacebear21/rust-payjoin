@@ -41,7 +41,10 @@ use super::error::BuildSenderError;
 use super::*;
 use crate::error::{InternalReplayError, ReplayError};
 use crate::hpke::{decrypt_message_b, encrypt_message_a, HpkeSecretKey};
-use crate::ohttp::{ohttp_encapsulate, process_get_res, process_post_res, DirectoryResponseError};
+use crate::ohttp::{
+    classify_directory_error, ohttp_encapsulate, process_get_res, process_post_res,
+    DirectoryErrorClassification,
+};
 use crate::persist::{
     MaybeFatalTransition, MaybeSuccessTransitionWithNoResults, NextStateTransition,
 };
@@ -51,6 +54,7 @@ use crate::{HpkeKeyPair, HpkePublicKey, IntoUrl, OhttpKeys, PjUri, Request};
 
 mod error;
 mod session;
+
 
 /// A builder to construct the properties of a [`Sender`].
 /// V2 SenderBuilder differs from V1 in that it does not allow the receiver's output substitution preference to be disabled.
@@ -323,29 +327,17 @@ impl Sender<WithReplyKey> {
     ) -> MaybeFatalTransition<SessionEvent, Sender<PollingForProposal>, EncapsulationError> {
         match process_post_res(response, post_ctx.ohttp_ctx) {
             Ok(()) => {}
-            Err(e) => match e {
-                DirectoryResponseError::InvalidSize(_) => {
-                    return MaybeFatalTransition::transient(
-                        InternalEncapsulationError::DirectoryResponse(e).into(),
-                    );
-                }
-                DirectoryResponseError::OhttpDecapsulation(_) => {
+            Err(e) => match classify_directory_error(&e) {
+                DirectoryErrorClassification::Fatal => {
                     return MaybeFatalTransition::fatal(
                         SessionEvent::SessionInvalid(e.to_string()),
                         InternalEncapsulationError::DirectoryResponse(e).into(),
                     );
                 }
-                DirectoryResponseError::UnexpectedStatusCode(status_code) => {
-                    if status_code.is_client_error() {
-                        return MaybeFatalTransition::fatal(
-                            SessionEvent::SessionInvalid(e.to_string()),
-                            InternalEncapsulationError::DirectoryResponse(e).into(),
-                        );
-                    } else {
-                        return MaybeFatalTransition::transient(
-                            InternalEncapsulationError::DirectoryResponse(e).into(),
-                        );
-                    }
+                DirectoryErrorClassification::Transient => {
+                    return MaybeFatalTransition::transient(
+                        InternalEncapsulationError::DirectoryResponse(e).into(),
+                    );
                 }
             },
         }
@@ -491,29 +483,17 @@ impl Sender<PollingForProposal> {
         let body = match process_get_res(response, ohttp_ctx) {
             Ok(Some(body)) => body,
             Ok(None) => return MaybeSuccessTransitionWithNoResults::no_results(self.clone()),
-            Err(e) => match e {
-                DirectoryResponseError::InvalidSize(_) => {
-                    return MaybeSuccessTransitionWithNoResults::transient(
-                        InternalEncapsulationError::DirectoryResponse(e).into(),
-                    );
-                }
-                DirectoryResponseError::OhttpDecapsulation(_) => {
+            Err(e) => match classify_directory_error(&e) {
+                DirectoryErrorClassification::Fatal => {
                     return MaybeSuccessTransitionWithNoResults::fatal(
                         SessionEvent::SessionInvalid(e.to_string()),
                         InternalEncapsulationError::DirectoryResponse(e).into(),
                     );
                 }
-                DirectoryResponseError::UnexpectedStatusCode(status_code) => {
-                    if status_code.is_client_error() {
-                        return MaybeSuccessTransitionWithNoResults::fatal(
-                            SessionEvent::SessionInvalid(e.to_string()),
-                            InternalEncapsulationError::DirectoryResponse(e).into(),
-                        );
-                    } else {
-                        return MaybeSuccessTransitionWithNoResults::transient(
-                            InternalEncapsulationError::DirectoryResponse(e).into(),
-                        );
-                    }
+                DirectoryErrorClassification::Transient => {
+                    return MaybeSuccessTransitionWithNoResults::transient(
+                        InternalEncapsulationError::DirectoryResponse(e).into(),
+                    );
                 }
             },
         };

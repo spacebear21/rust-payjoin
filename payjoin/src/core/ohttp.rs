@@ -89,6 +89,34 @@ impl error::Error for DirectoryResponseError {
     }
 }
 
+/// Classification of how a DirectoryResponseError should be handled
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectoryErrorClassification {
+    Fatal,
+    Transient,
+}
+
+/// Classify a DirectoryResponseError as either fatal or transient
+///
+/// This implements the common logic used across all process_response methods:
+/// - OhttpDecapsulation errors are always fatal (OHTTP corruption)
+/// - InvalidSize errors are always transient (temporary network issues)
+/// - UnexpectedStatusCode errors are fatal for client errors (4xx), transient for server errors (5xx)
+pub fn classify_directory_error(error: &DirectoryResponseError) -> DirectoryErrorClassification {
+    use DirectoryResponseError::*;
+
+    match error {
+        OhttpDecapsulation(_) => DirectoryErrorClassification::Fatal,
+        InvalidSize(_) => DirectoryErrorClassification::Transient,
+        UnexpectedStatusCode(status_code) =>
+            if status_code.is_client_error() {
+                DirectoryErrorClassification::Fatal
+            } else {
+                DirectoryErrorClassification::Transient
+            },
+    }
+}
+
 pub fn process_get_res(
     res: &[u8],
     ohttp_context: ohttp::ClientResponse,

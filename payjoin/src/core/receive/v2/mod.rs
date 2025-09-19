@@ -44,8 +44,8 @@ use super::{
 use crate::error::{InternalReplayError, ReplayError};
 use crate::hpke::{decrypt_message_a, encrypt_message_b, HpkeKeyPair, HpkePublicKey};
 use crate::ohttp::{
-    ohttp_encapsulate, process_get_res, process_post_res, DirectoryResponseError,
-    OhttpEncapsulationError, OhttpKeys,
+    classify_directory_error, ohttp_encapsulate, process_get_res, process_post_res,
+    DirectoryErrorClassification, OhttpEncapsulationError, OhttpKeys,
 };
 use crate::output_substitution::OutputSubstitution;
 use crate::persist::{
@@ -275,6 +275,8 @@ pub fn process_err_res(body: &[u8], context: ohttp::ClientResponse) -> Result<()
     process_post_res(body, context).map_err(|e| InternalSessionError::DirectoryResponse(e).into())
 }
 
+
+
 #[derive(Debug, Clone)]
 pub struct ReceiverBuilder(SessionContext);
 
@@ -378,31 +380,19 @@ impl Receiver<Initialized> {
                 Error::Implementation(_) => return MaybeFatalTransitionWithNoResults::transient(e),
                 Error::Protocol(ref protocol_err) => match protocol_err {
                     ProtocolError::V2(session_error) => match session_error {
-                        SessionError(InternalSessionError::DirectoryResponse(directory_error)) =>
-                            match directory_error {
-                                DirectoryResponseError::OhttpDecapsulation(_) =>
+                        SessionError(InternalSessionError::DirectoryResponse(directory_error)) => {
+                            match classify_directory_error(directory_error) {
+                                DirectoryErrorClassification::Fatal => {
                                     return MaybeFatalTransitionWithNoResults::fatal(
-                                        SessionEvent::SessionInvalid(
-                                            directory_error.to_string(),
-                                            None,
-                                        ),
+                                        SessionEvent::SessionInvalid(directory_error.to_string(), None),
                                         e,
-                                    ),
-                                DirectoryResponseError::InvalidSize(_) =>
-                                    return MaybeFatalTransitionWithNoResults::transient(e),
-                                DirectoryResponseError::UnexpectedStatusCode(status_code) =>
-                                    if status_code.is_client_error() {
-                                        return MaybeFatalTransitionWithNoResults::fatal(
-                                            SessionEvent::SessionInvalid(
-                                                directory_error.to_string(),
-                                                None,
-                                            ),
-                                            e,
-                                        );
-                                    } else {
-                                        return MaybeFatalTransitionWithNoResults::transient(e);
-                                    },
-                            },
+                                    );
+                                }
+                                DirectoryErrorClassification::Transient => {
+                                    return MaybeFatalTransitionWithNoResults::transient(e);
+                                }
+                            }
+                        }
                         _ =>
                             return MaybeFatalTransitionWithNoResults::fatal(
                                 SessionEvent::SessionInvalid(session_error.to_string(), None),
@@ -1078,25 +1068,14 @@ impl Receiver<PayjoinProposal> {
     ) -> MaybeSuccessTransition<(), SessionEvent, Error> {
         match process_post_res(res, ohttp_context) {
             Ok(_) => MaybeSuccessTransition::success(()),
-            Err(e) => match e {
-                DirectoryResponseError::OhttpDecapsulation(_) => MaybeSuccessTransition::fatal(
+            Err(e) => match classify_directory_error(&e) {
+                DirectoryErrorClassification::Fatal => MaybeSuccessTransition::fatal(
                     SessionEvent::SessionInvalid(e.to_string(), None),
                     InternalSessionError::DirectoryResponse(e).into(),
                 ),
-                DirectoryResponseError::InvalidSize(_) => MaybeSuccessTransition::transient(
+                DirectoryErrorClassification::Transient => MaybeSuccessTransition::transient(
                     InternalSessionError::DirectoryResponse(e).into(),
                 ),
-                DirectoryResponseError::UnexpectedStatusCode(status_code) =>
-                    if status_code.is_client_error() {
-                        MaybeSuccessTransition::fatal(
-                            SessionEvent::SessionInvalid(e.to_string(), None),
-                            InternalSessionError::DirectoryResponse(e).into(),
-                        )
-                    } else {
-                        MaybeSuccessTransition::transient(
-                            InternalSessionError::DirectoryResponse(e).into(),
-                        )
-                    },
             },
         }
     }

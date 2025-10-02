@@ -139,6 +139,7 @@ pub enum ReceiveSession {
     ProvisionalProposal(Receiver<ProvisionalProposal>),
     PayjoinProposal(Receiver<PayjoinProposal>),
     HasReplyableError(Receiver<HasReplyableError>),
+    Closed,
 }
 
 impl ReceiveSession {
@@ -203,10 +204,11 @@ impl ReceiveSession {
                         ReceiveSession::ProvisionalProposal(r) => r.session_context,
                         ReceiveSession::PayjoinProposal(r) => r.session_context,
                         ReceiveSession::HasReplyableError(r) => r.session_context,
+                        ReceiveSession::Closed => unreachable!(),
                     },
                 })),
 
-            (current_state, SessionEvent::Closed(_)) => Ok(current_state),
+            (current_state, SessionEvent::Closed(_)) => Ok(ReceiveSession::Closed),
 
             (current_state, event) => Err(InternalReplayError::InvalidEvent(
                 Box::new(event),

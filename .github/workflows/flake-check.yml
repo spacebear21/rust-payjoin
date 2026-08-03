@@ -6,8 +6,18 @@ on:
     branches: [master]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths-ignore:
+    # The msrv, stable, and nightly checks run the same workspace test
+    # suite that rust.yml already runs on every pull request, and the
+    # maintenance check duplicates the Lint and Format jobs. The signal
+    # unique to this workflow is that the nix packaging itself still
+    # works, so on pull requests it only runs when nix-relevant inputs
+    # change. Master pushes always run the full check.
+    paths:
+      - "**/*.nix"
       - "flake.lock"
+      - "Cargo-minimal.lock"
+      - "Cargo-recent.lock"
+      - "rust-toolchain.toml"
 
 # Pushing a new commit makes any still-running workflow for the same pull
 # request obsolete; cancel it instead of letting it occupy runners. Other

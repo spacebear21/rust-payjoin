@@ -28,7 +28,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -58,14 +58,14 @@ jobs:
       packages: write
     steps:
       - name: Wait for other workflows
-        uses: lewagon/wait-on-check-action@v1.5.0
+        uses: lewagon/wait-on-check-action@v1.9.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           running-workflow-name: "Build and upload image artifact"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -83,7 +83,7 @@ jobs:
           ls -lh payjoin-mailroom-${TAG}.tar
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: payjoin-mailroom-image-${{ github.sha }}
           path: payjoin-mailroom-*.tar

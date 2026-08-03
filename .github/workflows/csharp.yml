@@ -41,7 +41,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
       - name: "Install nix"
@@ -64,7 +64,7 @@ jobs:
         working-directory: payjoin-ffi/csharp
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install Rust 1.85.0
         uses: dtolnay/rust-toolchain@1.85.0
 
@@ -72,7 +72,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install .NET 10 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
@@ -124,7 +124,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust 1.85.0
         uses: dtolnay/rust-toolchain@1.85.0
@@ -179,7 +179,7 @@ jobs:
           PAYJOIN_FFI_CROSS=1 PAYJOIN_FFI_RID=${{ matrix.rid }} bash ./scripts/build_nuget_native.sh
 
       - name: Upload NuGet native asset
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.rid }}
           path: payjoin-ffi/csharp/artifacts/runtimes/${{ matrix.rid }}/native/*
@@ -201,7 +201,7 @@ jobs:
         working-directory: payjoin-ffi/csharp
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust 1.85.0
         uses: dtolnay/rust-toolchain@1.85.0
@@ -210,12 +210,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install .NET 10 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
       - name: Download native assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: payjoin-ffi/csharp/artifacts/downloaded
 
@@ -234,7 +234,7 @@ jobs:
         run: dotnet pack Payjoin.csproj --configuration Release --output artifacts/packages
 
       - name: Upload NuGet package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: payjoin-csharp-nuget-package
           path: payjoin-ffi/csharp/artifacts/packages/*.nupkg
@@ -264,15 +264,15 @@ jobs:
             rid: win-x64
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install .NET 10 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
       - name: Download NuGet package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: payjoin-csharp-nuget-package
           path: payjoin-ffi/csharp/artifacts/packages

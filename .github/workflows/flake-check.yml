@@ -1,11 +1,30 @@
 name: Flake Check
 
+# See rust.yml for why push events are restricted to master.
 on:
   push:
+    branches: [master]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths-ignore:
+    # The msrv, stable, and nightly checks run the same workspace test
+    # suite that rust.yml already runs on every pull request, and the
+    # maintenance check duplicates the Lint and Format jobs. The signal
+    # unique to this workflow is that the nix packaging itself still
+    # works, so on pull requests it only runs when nix-relevant inputs
+    # change. Master pushes always run the full check.
+    paths:
+      - "**/*.nix"
       - "flake.lock"
+      - "Cargo-minimal.lock"
+      - "Cargo-recent.lock"
+      - "rust-toolchain.toml"
+
+# Pushing a new commit makes any still-running workflow for the same pull
+# request obsolete; cancel it instead of letting it occupy runners. Other
+# events get a unique group so they are never cancelled or queued.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   flake-check:
@@ -19,7 +38,7 @@ jobs:
           - maintenance
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main

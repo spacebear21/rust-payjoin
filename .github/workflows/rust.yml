@@ -1,6 +1,20 @@
 name: Continuous integration
 
-on: [push, pull_request]
+# Pull requests from branches in this repository would otherwise trigger
+# both a push and a pull_request run for every commit; restricting push
+# events to master keeps one run per change while still producing the
+# master check runs the release workflow waits on.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Pushing a new commit makes any still-running workflow for the same pull
+# request obsolete; cancel it instead of letting it occupy runners. Other
+# events get a unique group so they are never cancelled or queued.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   Test:
@@ -20,7 +34,7 @@ jobs:
       RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
     steps:
       - name: "Checkout repo"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: "Install ${{ matrix.rust }} toolchain"
         uses: dtolnay/rust-toolchain@master
         with:
@@ -37,6 +51,13 @@ jobs:
           echo "$(nix build .#nginx-with-stream --print-out-paths --no-link)/bin" >> $GITHUB_PATH
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Run tests
         run: RUST_LOG=debug bash contrib/test.sh
 
@@ -44,9 +65,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout repo"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: "Install nix"
         uses: DeterminateSystems/determinate-nix-action@main
       - name: "Use nix cache"
@@ -69,7 +97,7 @@ jobs:
       RUSTUP_TOOLCHAIN: stable
     steps:
       - name: "Checkout repo"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: "Install toolchain"
         # rust-cache usage with stable Rust is most effective, as a cache is tied to the Rust version
         uses: dtolnay/rust-toolchain@stable
@@ -83,6 +111,13 @@ jobs:
           echo "$(nix build .#nginx-with-stream --print-out-paths --no-link)/bin" >> $GITHUB_PATH
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: "Install cargo-llvm-cov"
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: "Generate code coverage for tests"
@@ -96,17 +131,20 @@ jobs:
     name: Code spell check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: codespell-project/actions-codespell@v2
 
   DiffMutants:
     name: Diff cargo-mutants
+    # The diff is taken against the pull request base branch; on other
+    # events base_ref is empty and the job mutates an empty diff.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
       - name: "Checkout repo"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0 # required for full diff context
       - name: Fetch base branch for diff
@@ -122,12 +160,19 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # This job only runs on pull requests, so it can never save a
+          # cache that other branches could see. Restore the stable Test
+          # job's master cache instead of keeping a per-branch copy; both
+          # jobs build the workspace with the stable toolchain.
+          shared-key: Test
+          save-if: false
       - name: Run cargo-mutants on diff
         run: >
           cargo mutants --no-shuffle --in-diff git.diff
           --test-tool=cargo --timeout=500 --build-timeout=500
       - name: Upload mutants.out
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mutants-incremental-cargo.out
@@ -138,10 +183,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout repo"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: "Install nightly toolchain"
         uses: dtolnay/rust-toolchain@nightly
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: "Build fuzz targets"
         run: cd fuzz && cargo build

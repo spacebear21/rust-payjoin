@@ -9,12 +9,12 @@ jobs:
     permissions:
       issues: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants@27.1.0
       - run: cargo mutants --in-place --no-shuffle
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mutants.out

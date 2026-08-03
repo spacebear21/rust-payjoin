@@ -12,6 +12,15 @@ on:
       # the flake change this workflow's environment.
       - flake.nix
       - flake.lock
+  # GitHub Actions caches saved on a pull request branch are invisible to
+  # other pull requests; only caches saved on master are shared. Run the
+  # native asset builds on master so every pull request starts from a warm
+  # cross-compilation cache, and so cross-build breakage is caught after
+  # merge. The test, pack, and smoke jobs stay pull-request-only.
+  push:
+    branches: [master]
+    paths:
+      - payjoin-ffi/**
 
 # Pushing a new commit makes any still-running workflow for the same pull
 # request obsolete; cancel it instead of letting it occupy runners. Other
@@ -23,6 +32,9 @@ concurrency:
 jobs:
   build-csharp-and-test-unix:
     name: "Build and test csharp"
+    # Cache seeding on master pushes only needs build-nuget-native; see the
+    # push trigger comment above.
+    if: github.event_name != 'push'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -41,6 +53,9 @@ jobs:
 
   build-csharp-and-test-windows:
     name: "Build and test csharp (windows)"
+    # Cache seeding on master pushes only needs build-nuget-native; see the
+    # push trigger comment above.
+    if: github.event_name != 'push'
     runs-on: windows-latest
     env:
       RUSTUP_TOOLCHAIN: 1.85
@@ -168,6 +183,9 @@ jobs:
 
   pack-nuget:
     name: "Pack C# NuGet package"
+    # Cache seeding on master pushes only needs build-nuget-native; see the
+    # push trigger comment above.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     needs: build-nuget-native
     env:

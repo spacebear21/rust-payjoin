@@ -118,6 +118,14 @@ jobs:
 
       - name: Use cache
         uses: Swatinem/rust-cache@v2
+        with:
+          # rust-cache derives its key from the job id, toolchain, and
+          # lockfiles, all identical across this matrix, so without an
+          # explicit key the six RIDs race for one cache entry and only
+          # the first finisher's target directory is ever stored.
+          key: ${{ matrix.rid }}
+          # cargo-xwin downloads the MSVC CRT/SDK here on every cold run.
+          cache-directories: ~/.cache/cargo-xwin
 
       - name: Install cross toolchain
         # Version- and hash-pinned: these tools produce the shipped binaries.

@@ -9,6 +9,13 @@ on:
     branches: [master]
   pull_request:
 
+# Pushing a new commit makes any still-running workflow for the same pull
+# request obsolete; cancel it instead of letting it occupy runners. Other
+# events get a unique group so they are never cancelled or queued.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   Test:
     runs-on: ubuntu-latest

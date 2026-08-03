@@ -1,6 +1,10 @@
 name: Continuous integration
 
-on: [push, pull_request]
+# See rust.yml for why push events are restricted to master.
+on:
+  push:
+    branches: [master]
+  pull_request:
 
 jobs:
   Format:

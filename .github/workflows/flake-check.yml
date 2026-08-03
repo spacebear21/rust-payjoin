@@ -1,7 +1,9 @@
 name: Flake Check
 
+# See rust.yml for why push events are restricted to master.
 on:
   push:
+    branches: [master]
   pull_request:
     types: [opened, synchronize, reopened]
     paths-ignore:

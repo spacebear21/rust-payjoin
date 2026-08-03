@@ -115,6 +115,9 @@ jobs:
 
   DiffMutants:
     name: Diff cargo-mutants
+    # The diff is taken against the pull request base branch; on other
+    # events base_ref is empty and the job mutates an empty diff.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: stable

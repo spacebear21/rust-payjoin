@@ -1,4 +1,4 @@
-name: Continuous integration
+name: Format
 
 # See rust.yml for why push events are restricted to master.
 on:

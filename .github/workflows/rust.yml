@@ -51,6 +51,13 @@ jobs:
           echo "$(nix build .#nginx-with-stream --print-out-paths --no-link)/bin" >> $GITHUB_PATH
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Run tests
         run: RUST_LOG=debug bash contrib/test.sh
 
@@ -61,6 +68,13 @@ jobs:
         uses: actions/checkout@v6
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: "Install nix"
         uses: DeterminateSystems/determinate-nix-action@main
       - name: "Use nix cache"
@@ -97,6 +111,13 @@ jobs:
           echo "$(nix build .#nginx-with-stream --print-out-paths --no-link)/bin" >> $GITHUB_PATH
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: "Install cargo-llvm-cov"
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: "Generate code coverage for tests"
@@ -139,6 +160,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # This job only runs on pull requests, so it can never save a
+          # cache that other branches could see. Restore the stable Test
+          # job's master cache instead of keeping a per-branch copy; both
+          # jobs build the workspace with the stable toolchain.
+          shared-key: Test
+          save-if: false
       - name: Run cargo-mutants on diff
         run: >
           cargo mutants --no-shuffle --in-diff git.diff
@@ -160,5 +188,12 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
       - name: "Use cache"
         uses: Swatinem/rust-cache@v2
+        with:
+          # Caches saved on a pull request branch are visible only to that
+          # pull request and duplicate the master entry; with three
+          # toolchains at ~1.5 GB each they overflow the repository's 10 GB
+          # cache budget and evict other workflows' caches. Save only from
+          # master, which every branch can restore.
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: "Build fuzz targets"
         run: cd fuzz && cargo build

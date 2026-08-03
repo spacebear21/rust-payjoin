@@ -141,6 +141,10 @@ jobs:
           key: ${{ matrix.rid }}
           # cargo-xwin downloads the MSVC CRT/SDK here on every cold run.
           cache-directories: ~/.cache/cargo-xwin
+          # Pull request branch caches are invisible to other pull requests
+          # and would duplicate the master entries within the repository's
+          # 10 GB cache budget; only the master seeding runs save.
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: Install cross toolchain
         # Version- and hash-pinned: these tools produce the shipped binaries.

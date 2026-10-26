@@ -278,6 +278,26 @@ fn commits_to_all_inputs_and_outputs(sighash_type: PsbtSighashType) -> bool {
     matches!(sighash_type.taproot_hash_ty(), Ok(TapSighashType::Default | TapSighashType::All))
 }
 
+/// The absolute fee of a PSBT.
+///
+/// Spent values come from [`InternalInputPair::previous_txout`], the same
+/// source every other check reads, rather than from [`Psbt::fee`], which
+/// prefers an unauthenticated `witness_utxo` over the `non_witness_utxo`.
+///
+/// [`InternalInputPair::previous_txout`]: crate::psbt::InternalInputPair::previous_txout
+fn absolute_fee(psbt: &Psbt) -> InternalResult<Amount> {
+    let input_value = psbt.input_pairs().try_fold(Amount::ZERO, |acc, input_pair| {
+        let value = input_pair.previous_txout().map_err(InternalProposalError::PrevTxOut)?.value;
+        acc.checked_add(value).ok_or(InternalProposalError::FeeCalculationOverflow)
+    })?;
+    let output_value = psbt.unsigned_tx.output.iter().try_fold(Amount::ZERO, |acc, txout| {
+        acc.checked_add(txout.value).ok_or(InternalProposalError::FeeCalculationOverflow)
+    })?;
+    input_value
+        .checked_sub(output_value)
+        .ok_or(InternalProposalError::Psbt(bitcoin::psbt::Error::NegativeFee))
+}
+
 /// Whether `originals` appear among `proposed` in the same relative order.
 ///
 /// BIP 78 forbids the receiver from shuffling: its additional inputs "must be inserted at a
@@ -305,8 +325,8 @@ impl PsbtContext {
     }
 
     fn check_fees(&self, proposal: &Psbt, contributed_fee: Amount) -> InternalResult<()> {
-        let proposed_fee = proposal.fee().map_err(InternalProposalError::Psbt)?;
-        let original_fee = self.original_psbt.fee().map_err(InternalProposalError::Psbt)?;
+        let proposed_fee = absolute_fee(proposal)?;
+        let original_fee = absolute_fee(&self.original_psbt)?;
         ensure(original_fee <= proposed_fee, InternalProposalError::AbsoluteFeeDecreased)?;
         ensure(
             contributed_fee <= proposed_fee - original_fee,
@@ -446,6 +466,12 @@ impl PsbtContext {
                             || proposed.psbtin.non_witness_utxo.is_some(),
                         InternalProposalError::ReceiverTxinMissingUtxoInfo,
                     )?;
+                    // Verify that the UTXO fields agree with the outpoint and
+                    // with each other, so that every later read of the spent
+                    // output sees the same value.
+                    proposed
+                        .validate_utxo()
+                        .map_err(InternalProposalError::ReceiverTxinInvalidUtxo)?;
                     ensure(
                         proposed.txin.sequence == original.txin.sequence,
                         InternalProposalError::MixedSequence,
@@ -748,7 +774,7 @@ mod test {
     use super::*;
     use crate::core::Url;
     use crate::output_substitution::OutputSubstitution;
-    use crate::psbt::PsbtExt;
+    use crate::psbt::{InternalPsbtInputError, PsbtExt};
     use crate::send::{AdditionalFeeContribution, InternalBuildSenderError, InternalProposalError};
 
     /// Creates a PSBT context from the original PSBT test vector from BIP-78
@@ -1261,6 +1287,80 @@ mod test {
             .expect_err("Fee rate should not be computable from an overflowing fee");
         assert!(matches!(err, InternalProposalError::FeeCalculationOverflow));
 
+        Ok(())
+    }
+
+    /// Points the receiver input of the BIP 78 proposal vector at a previous
+    /// transaction the test controls, so its `non_witness_utxo` can match the
+    /// outpoint. Returns the index of the receiver input.
+    fn with_receiver_non_witness_utxo(proposal: &mut bitcoin::Psbt) -> usize {
+        let receiver_index = 1;
+        let input = &mut proposal.inputs[receiver_index];
+        let prev_txout = input.witness_utxo.clone().expect("receiver input has a witness utxo");
+        let prev_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![prev_txout],
+        };
+        proposal.unsigned_tx.input[receiver_index].previous_output =
+            OutPoint::new(prev_tx.compute_txid(), 0);
+        input.non_witness_utxo = Some(prev_tx);
+        receiver_index
+    }
+
+    #[test]
+    fn test_receiver_input_with_matching_non_witness_utxo() -> Result<(), BoxError> {
+        let ctx = create_psbt_context()?;
+        let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+        with_receiver_non_witness_utxo(&mut proposal);
+        let result = ctx.process_proposal(proposal);
+        assert!(result.is_ok(), "Expected an Ok result got: {:#?}", result.err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_receiver_input_non_witness_utxo_txid_mismatch() -> Result<(), BoxError> {
+        let ctx = create_psbt_context()?;
+        let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+        let receiver_index = with_receiver_non_witness_utxo(&mut proposal);
+        // Changing the previous transaction changes its txid, so it no longer
+        // matches the outpoint.
+        let delta = Amount::from_sat(10_000);
+        let input = &mut proposal.inputs[receiver_index];
+        input.witness_utxo = None;
+        input.non_witness_utxo.as_mut().expect("non_witness_utxo was just set").output[0].value +=
+            delta;
+        proposal.unsigned_tx.output[1].value += delta;
+
+        assert!(matches!(
+            ctx.process_proposal(proposal),
+            Err(InternalProposalError::ReceiverTxinInvalidUtxo(
+                InternalPsbtInputError::UnequalTxid
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_receiver_input_witness_utxo_contradicts_non_witness_utxo() -> Result<(), BoxError> {
+        let ctx = create_psbt_context()?;
+        let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+        let receiver_index = with_receiver_non_witness_utxo(&mut proposal);
+        let delta = Amount::from_sat(10_000);
+        proposal.inputs[receiver_index]
+            .witness_utxo
+            .as_mut()
+            .expect("receiver input has a witness utxo")
+            .value += delta;
+        proposal.unsigned_tx.output[1].value += delta;
+
+        assert!(matches!(
+            ctx.process_proposal(proposal),
+            Err(InternalProposalError::ReceiverTxinInvalidUtxo(
+                InternalPsbtInputError::SegWitTxOutMismatch
+            ))
+        ));
         Ok(())
     }
 

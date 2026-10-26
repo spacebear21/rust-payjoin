@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- The sender rejects a payjoin proposal whose receiver input carries UTXO
+  information that contradicts the outpoint it spends, either a
+  `non_witness_utxo` with the wrong txid or a `witness_utxo` that differs
+  from the `non_witness_utxo`. Fee checks now read every spent value from
+  the same validated source
+
 ## 1.2.0
 
 This release adds a non-blocking interface to the receiver state machine.

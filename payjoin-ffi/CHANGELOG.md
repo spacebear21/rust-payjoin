@@ -1,5 +1,8 @@
 ## Unreleased
 
+- The sender rejects a payjoin proposal whose receiver input carries UTXO
+  information that contradicts the outpoint it spends
+
 ## [0.25.1]
 
 - Wraps payjoin 1.2.0

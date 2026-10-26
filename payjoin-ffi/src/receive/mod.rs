@@ -1390,6 +1390,11 @@ impl InputPair {
     ///
     /// `expected_weight` is required when the weight cannot be predicted from the
     /// input itself, such as an unsigned P2TR input, and must be `None` otherwise.
+    ///
+    /// Payjoin senders accept a bare `witness_utxo` only for a P2WPKH, P2SH-P2WPKH, or
+    /// P2TR key path spend. Any other input, such as a P2WSH or P2TR script path spend,
+    /// is accepted only if the signer adds a `non_witness_utxo` holding the transaction
+    /// that created the output, as Bitcoin Core's wallet does.
     #[uniffi::constructor]
     pub fn new(
         txin: TxIn,
@@ -1439,6 +1444,10 @@ impl InputPair {
     ///
     /// `expected_weight` must accurately reflect the witness script spend, or fee
     /// calculation will be wrong.
+    ///
+    /// This sets only the `witness_utxo`. Payjoin senders accept the input only if the
+    /// signed proposal also carries a `non_witness_utxo` holding the transaction that
+    /// created the output. Bitcoin Core's wallet adds it when signing.
     #[uniffi::constructor]
     pub fn new_p2wsh(
         txout: TxOut,
@@ -1469,6 +1478,11 @@ impl InputPair {
     /// `expected_weight` must accurately reflect the script path spend, or fee
     /// calculation will be wrong. Use [`InputPair::new_p2tr_keyspend`] for key path
     /// spends.
+    ///
+    /// This sets only the `witness_utxo`. Payjoin senders accept the input only if the
+    /// signed proposal also carries a `non_witness_utxo` holding the transaction that
+    /// created the output. Bitcoin Core's wallet adds it when signing, unless every input
+    /// of the transaction is a taproot input.
     #[uniffi::constructor]
     pub fn new_p2tr_scriptpath_spend(
         txout: TxOut,

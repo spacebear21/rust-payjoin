@@ -4,9 +4,15 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use bitcoin::address::FromScriptError;
+use bitcoin::hashes::Hash;
 use bitcoin::psbt::Psbt;
+use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, XOnlyPublicKey};
+use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::transaction::InputWeightPrediction;
-use bitcoin::{bip32, psbt, Address, AddressType, Amount, Network, TxIn, TxOut, Weight};
+use bitcoin::{
+    bip32, ecdsa, psbt, taproot, Address, AddressType, Amount, Network, Script, ScriptBuf,
+    Transaction, TxIn, TxOut, WPubkeyHash, Weight,
+};
 /// Shared non-witness weight for txid (32), index (4), and sequence (4) fields.
 /// We only need to add the weight of the txid: 32, index: 4 and sequence: 4 as rust_bitcoin
 /// already accounts for the scriptsig length when calculating InputWeightPrediction
@@ -281,6 +287,125 @@ impl InternalInputPair<'_> {
         let input_weight = iwp.weight() + NON_WITNESS_INPUT_WEIGHT;
         Ok(input_weight)
     }
+
+    /// Verifies that this finalized input, at `index` of the transaction in
+    /// `cache`, carries a valid signature over `prevouts[index]`, the output
+    /// it spends.
+    ///
+    /// Segwit signatures commit to the amount they spend (BIP 143 for v0,
+    /// BIP 341 for taproot). A signature over a `witness_utxo` that differs
+    /// from the real spent output is invalid on chain, so the transaction
+    /// cannot be broadcast, and a `witness_utxo` that the signature verifies
+    /// against is safe to trust. `prevouts` holds the spent output of every input of the transaction,
+    /// in order. Taproot signatures without `SIGHASH_ANYONECANPAY` commit to
+    /// all of them.
+    pub fn verify_signature(
+        &self,
+        cache: &mut SighashCache<&Transaction>,
+        index: usize,
+        prevouts: &[TxOut],
+    ) -> Result<(), InputSignatureError> {
+        use InputSignatureError::*;
+
+        let prevout = prevouts.get(index).ok_or(MalformedSpend)?;
+        let script_pubkey = &prevout.script_pubkey;
+        let script_sig = self.psbtin.final_script_sig.as_deref().unwrap_or(Script::new());
+        let witness: Vec<&[u8]> = self
+            .psbtin
+            .final_script_witness
+            .as_ref()
+            .map(|w| w.iter().collect())
+            .unwrap_or_default();
+
+        if script_pubkey.is_p2wpkh() {
+            if !script_sig.is_empty() {
+                return Err(MalformedSpend);
+            }
+            verify_p2wpkh(cache, index, script_pubkey, prevout.value, &witness)
+        } else if script_pubkey.is_p2sh() {
+            let redeem_script = nested_p2wpkh_redeem_script(script_sig).ok_or(UnsupportedScript)?;
+            if ScriptBuf::new_p2sh(&redeem_script.script_hash()) != *script_pubkey {
+                return Err(MalformedSpend);
+            }
+            verify_p2wpkh(cache, index, redeem_script, prevout.value, &witness)
+        } else if script_pubkey.is_p2tr() {
+            if !script_sig.is_empty() {
+                return Err(MalformedSpend);
+            }
+            verify_p2tr_key_spend(cache, index, script_pubkey, prevouts, &witness)
+        } else {
+            Err(UnsupportedScript)
+        }
+    }
+}
+
+/// The P2WPKH redeem script of a nested segwit scriptSig, which must be a
+/// single push of that script.
+fn nested_p2wpkh_redeem_script(script_sig: &Script) -> Option<&Script> {
+    let (push, redeem_script) = script_sig.as_bytes().split_first()?;
+    let redeem_script = Script::from_bytes(redeem_script);
+    (usize::from(*push) == redeem_script.len() && redeem_script.is_p2wpkh())
+        .then_some(redeem_script)
+}
+
+fn verify_p2wpkh(
+    cache: &mut SighashCache<&Transaction>,
+    index: usize,
+    p2wpkh_script: &Script,
+    value: Amount,
+    witness: &[&[u8]],
+) -> Result<(), InputSignatureError> {
+    use InputSignatureError::*;
+
+    let [signature, pubkey] = witness else { return Err(MalformedSpend) };
+    if ScriptBuf::new_p2wpkh(&WPubkeyHash::hash(pubkey)) != *p2wpkh_script {
+        return Err(MalformedSpend);
+    }
+    let pubkey = PublicKey::from_slice(pubkey).map_err(|_| MalformedSpend)?;
+    let signature = ecdsa::Signature::from_slice(signature).map_err(|_| MalformedSpend)?;
+    let sighash = cache
+        .p2wpkh_signature_hash(index, p2wpkh_script, value, signature.sighash_type)
+        .map_err(|_| InvalidSignature)?;
+    // Consensus accepts high-S signatures, libsecp256k1 does not.
+    let mut signature = signature.signature;
+    signature.normalize_s();
+    Secp256k1::verification_only()
+        .verify_ecdsa(&Message::from_digest(sighash.to_byte_array()), &signature, &pubkey)
+        .map_err(|_| InvalidSignature)
+}
+
+fn verify_p2tr_key_spend(
+    cache: &mut SighashCache<&Transaction>,
+    index: usize,
+    p2tr_script: &Script,
+    prevouts: &[TxOut],
+    witness: &[&[u8]],
+) -> Result<(), InputSignatureError> {
+    use InputSignatureError::*;
+
+    let signature = match witness {
+        [signature] => signature,
+        [] => return Err(MalformedSpend),
+        // A script path spend, or a key path spend with an annex.
+        _ => return Err(UnsupportedScript),
+    };
+    let signature = taproot::Signature::from_slice(signature).map_err(|_| MalformedSpend)?;
+    // A P2TR scriptPubKey is OP_1 followed by a push of the 32 byte output key.
+    let output_key = p2tr_script
+        .as_bytes()
+        .get(2..)
+        .and_then(|key| XOnlyPublicKey::from_slice(key).ok())
+        .ok_or(MalformedSpend)?;
+    let sighash = cache
+        .taproot_key_spend_signature_hash(index, &Prevouts::All(prevouts), signature.sighash_type)
+        .map_err(|_| InvalidSignature)?;
+    Secp256k1::verification_only()
+        .verify_schnorr(
+            &signature.signature,
+            &Message::from_digest(sighash.to_byte_array()),
+            &output_key,
+        )
+        .map_err(|_| InvalidSignature)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -459,6 +584,33 @@ impl std::error::Error for InputWeightError {
 impl From<AddressTypeError> for InputWeightError {
     fn from(value: AddressTypeError) -> Self { Self::AddressType(value) }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum InputSignatureError {
+    /// The output type cannot be authenticated from its signature alone.
+    UnsupportedScript,
+    /// The scriptSig or witness does not have the form its output requires.
+    MalformedSpend,
+    /// The signature does not commit to the claimed output.
+    InvalidSignature,
+}
+
+impl fmt::Display for InputSignatureError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::UnsupportedScript => write!(
+                f,
+                "only P2WPKH, P2SH-P2WPKH and P2TR key path spends without an annex can be verified without a non_witness_utxo"
+            ),
+            Self::MalformedSpend =>
+                write!(f, "the scriptSig or witness does not match the spent scriptPubKey"),
+            Self::InvalidSignature =>
+                write!(f, "the signature does not commit to the claimed spent output"),
+        }
+    }
+}
+
+impl std::error::Error for InputSignatureError {}
 
 #[cfg(test)]
 mod test {

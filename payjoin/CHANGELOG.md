@@ -9,6 +9,12 @@
   `non_witness_utxo` with the wrong txid or a `witness_utxo` that differs
   from the `non_witness_utxo`. Fee checks now read every spent value from
   the same validated source
+- The sender checks that each receiver input proves the output it
+  spends, either with a `non_witness_utxo` whose txid matches the
+  outpoint or with a valid P2WPKH, P2SH-P2WPKH or P2TR key path
+  signature. Other receiver inputs, such as ones built with
+  `InputPair::new_p2wsh` or `InputPair::new_p2tr_scriptpath_spend`, need
+  a `non_witness_utxo`
 
 ## 1.2.0
 

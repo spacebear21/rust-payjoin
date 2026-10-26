@@ -63,6 +63,11 @@ pub struct InputPair {
 impl InputPair {
     /// Creates a new InputPair while validating that the passed [`TxIn`] and [`psbt::Input`]
     /// refer to the same and the correct UTXO.
+    ///
+    /// A sender can authenticate a bare `witness_utxo` only from the signature of a P2WPKH,
+    /// P2SH-P2WPKH, or P2TR key path spend. Any other input, such as a P2WSH or P2TR script
+    /// path spend, needs a `non_witness_utxo` holding the transaction that created the output,
+    /// set here or added by the signer, or payjoin senders reject the proposal.
     pub fn new(
         txin: TxIn,
         psbtin: psbt::Input,
@@ -178,6 +183,12 @@ impl InputPair {
     }
 
     /// Constructs a new [`InputPair`] for spending a native SegWit P2WSH output.
+    ///
+    /// This sets only the `witness_utxo`. Payjoin senders accept the input only if the signed
+    /// proposal also carries a `non_witness_utxo` holding the transaction that created the
+    /// output. Bitcoin Core's wallet adds it when signing. Other signers may not, in which case
+    /// build the input with [`InputPair::new`] and both UTXO fields, for example from BDK's
+    /// `Wallet::get_psbt_input`.
     pub fn new_p2wsh(
         txout: TxOut,
         outpoint: OutPoint,
@@ -205,6 +216,12 @@ impl InputPair {
     /// Callers must provide the expected input satisfiability weight. Ensure `expected_weight`
     /// accurately reflects your script-path spend. Incorrect weight may cause fee calculation errors.
     /// Use [`new_p2tr_keyspend`](Self::new_p2tr_keyspend) for key-path spends.
+    ///
+    /// This sets only the `witness_utxo`. Payjoin senders accept the input only if the signed
+    /// proposal also carries a `non_witness_utxo` holding the transaction that created the
+    /// output. Bitcoin Core's wallet adds it when signing, unless every input of the transaction
+    /// is a taproot input. Other signers may not, in which case build the input with
+    /// [`InputPair::new`] and both UTXO fields.
     pub fn new_p2tr_scriptpath_spend(
         txout: TxOut,
         outpoint: OutPoint,

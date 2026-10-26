@@ -2,6 +2,12 @@
 
 - The sender rejects a payjoin proposal whose receiver input carries UTXO
   information that contradicts the outpoint it spends
+- The sender checks that each receiver input proves the output it
+  spends, either with a `non_witness_utxo` whose txid matches the
+  outpoint or with a valid P2WPKH, P2SH-P2WPKH or P2TR key path
+  signature. Other receiver inputs, such as ones built with
+  `InputPair::new_p2wsh` or `InputPair::new_p2tr_scriptpath_spend`, need
+  a `non_witness_utxo`
 
 ## [0.25.1]
 

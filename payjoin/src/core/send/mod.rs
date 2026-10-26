@@ -10,7 +10,7 @@
 //! version 1, refer to the `send::v1` module documentation after enabling the `v1` feature.
 
 use bitcoin::psbt::{Psbt, PsbtSighashType};
-use bitcoin::sighash::TapSighashType;
+use bitcoin::sighash::{SighashCache, TapSighashType};
 use bitcoin::{Amount, FeeRate, Script, ScriptBuf, TxIn, TxOut, Weight};
 pub use error::{BuildSenderError, ResponseError, ValidationError, WellKnownError};
 pub(crate) use error::{InternalBuildSenderError, InternalProposalError, InternalValidationError};
@@ -320,6 +320,7 @@ impl PsbtContext {
         let contributed_fee = self.check_outputs(&proposal)?;
         self.restore_original_utxos(&mut proposal)?;
         self.restore_original_outputs(&mut proposal)?;
+        self.check_receiver_input_signatures(&proposal)?;
         self.check_fees(&proposal, contributed_fee)?;
         Ok(proposal)
     }
@@ -480,6 +481,47 @@ impl PsbtContext {
             }
         }
         ensure(original_inputs.peek().is_none(), InternalProposalError::MissingOrShuffledInputs)?;
+        Ok(())
+    }
+
+    /// Check that each receiver input proves the spent output it claims.
+    ///
+    /// A `non_witness_utxo` is committed to by the outpoint. A bare
+    /// `witness_utxo` is committed to only by the receiver's signature, so
+    /// verify that signature against it. Taproot signatures without
+    /// `SIGHASH_ANYONECANPAY` commit to every spent output, so this must run
+    /// after `restore_original_utxos`.
+    fn check_receiver_input_signatures(&self, proposal: &Psbt) -> InternalResult<()> {
+        let prevouts = proposal
+            .input_pairs()
+            .map(|input_pair| {
+                input_pair.previous_txout().cloned().map_err(InternalProposalError::PrevTxOut)
+            })
+            .collect::<InternalResult<Vec<TxOut>>>()?;
+        let mut sighash_cache = SighashCache::new(&proposal.unsigned_tx);
+        let mut original_inputs = self.original_psbt.input_pairs().peekable();
+
+        for (index, proposed) in proposal.input_pairs().enumerate() {
+            match original_inputs.peek() {
+                // our (sender)
+                Some(original)
+                    if proposed.txin.previous_output == original.txin.previous_output =>
+                {
+                    original_inputs.next();
+                }
+                // theirs (receiver)
+                None | Some(_) =>
+                    if proposed.psbtin.non_witness_utxo.is_some() {
+                        proposed
+                            .validate_utxo()
+                            .map_err(InternalProposalError::ReceiverTxinInvalidUtxo)?;
+                    } else {
+                        proposed
+                            .verify_signature(&mut sighash_cache, index, &prevouts)
+                            .map_err(InternalProposalError::ReceiverTxinUnverifiedUtxo)?;
+                    },
+            }
+        }
         Ok(())
     }
 
@@ -763,9 +805,12 @@ mod test {
     use bitcoin::ecdsa::Signature;
     use bitcoin::hashes::Hash;
     use bitcoin::hex::FromHex;
-    use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey, SECP256K1};
+    use bitcoin::key::TapTweak;
+    use bitcoin::script::PushBytes;
+    use bitcoin::secp256k1::{Keypair, Message, PublicKey, Secp256k1, SecretKey, SECP256K1};
+    use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache};
     use bitcoin::taproot::TaprootBuilder;
-    use bitcoin::{Amount, FeeRate, OutPoint, Script, ScriptBuf, Sequence, Txid, Witness};
+    use bitcoin::{taproot, Amount, FeeRate, OutPoint, Script, ScriptBuf, Sequence, Txid, Witness};
     use payjoin_test_utils::{
         BoxError, ADDITIONAL_FEE_OUTPUT_INDEX, MAX_ADDITIONAL_FEE_CONTRIBUTION,
         PARSED_ORIGINAL_PSBT, PARSED_PAYJOIN_PROPOSAL, PARSED_PAYJOIN_PROPOSAL_WITH_SENDER_INFO,
@@ -774,7 +819,7 @@ mod test {
     use super::*;
     use crate::core::Url;
     use crate::output_substitution::OutputSubstitution;
-    use crate::psbt::{InternalPsbtInputError, PsbtExt};
+    use crate::psbt::{InputSignatureError, InternalPsbtInputError, PsbtExt};
     use crate::send::{AdditionalFeeContribution, InternalBuildSenderError, InternalProposalError};
 
     /// Creates a PSBT context from the original PSBT test vector from BIP-78
@@ -1167,6 +1212,7 @@ mod test {
 
         ctx.fee_contribution = None;
         proposal.unsigned_tx.output[0].value = ctx.original_psbt.unsigned_tx.output[0].value;
+        sign_receiver_input(&mut proposal, 1, ReceiverScript::P2shP2wpkh);
 
         assert!(ctx.process_proposal(proposal).is_ok());
 
@@ -1181,6 +1227,7 @@ mod test {
         ctx.fee_contribution = None;
         proposal.unsigned_tx.output[0].value =
             ctx.original_psbt.unsigned_tx.output[0].value - Amount::from_sat(1);
+        sign_receiver_input(&mut proposal, 1, ReceiverScript::P2shP2wpkh);
 
         ctx.original_psbt.unsigned_tx.output[0].script_pubkey =
             ctx.original_psbt.unsigned_tx.output[1].script_pubkey.clone();
@@ -1361,6 +1408,485 @@ mod test {
                 InternalPsbtInputError::SegWitTxOutMismatch
             ))
         ));
+        Ok(())
+    }
+
+    /// Output types whose spends the sender can verify from a signature.
+    #[derive(Clone, Copy, Debug)]
+    enum ReceiverScript {
+        P2wpkh,
+        P2shP2wpkh,
+        P2tr,
+    }
+
+    const RECEIVER_SCRIPTS: [ReceiverScript; 3] =
+        [ReceiverScript::P2wpkh, ReceiverScript::P2shP2wpkh, ReceiverScript::P2tr];
+
+    /// How [`sign_receiver_input_with`] signs a receiver input.
+    #[derive(Clone, Copy, Debug, Default)]
+    struct Signing {
+        /// `None` signs with `SIGHASH_ALL`, or `SIGHASH_DEFAULT` for taproot.
+        sighash_type: Option<PsbtSighashType>,
+        /// Encode an ECDSA signature with the high S value consensus allows.
+        high_s: bool,
+    }
+
+    /// Gives the receiver input at `index` a `witness_utxo` of type `script`
+    /// owned by a test key, keeping its value, and finalizes the input with a
+    /// `SIGHASH_ALL` or `SIGHASH_DEFAULT` signature over `proposal`.
+    ///
+    /// The BIP 78 vector's receiver key is unknown, so tests that change the
+    /// proposal's transaction call this after their last change to keep the
+    /// receiver's signature valid.
+    fn sign_receiver_input(proposal: &mut bitcoin::Psbt, index: usize, script: ReceiverScript) {
+        sign_receiver_input_with(proposal, index, script, Signing::default())
+    }
+
+    /// Like [`sign_receiver_input`], signing as `signing` describes.
+    fn sign_receiver_input_with(
+        proposal: &mut bitcoin::Psbt,
+        index: usize,
+        script: ReceiverScript,
+        signing: Signing,
+    ) {
+        let secret_key = SecretKey::from_slice(&[0x42; 32]).expect("valid secret key");
+        let keypair = Keypair::from_secret_key(SECP256K1, &secret_key);
+        let pubkey = bitcoin::CompressedPublicKey(keypair.public_key());
+        let p2wpkh = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash());
+
+        let input = &mut proposal.inputs[index];
+        input.non_witness_utxo = None;
+        let witness_utxo = input.witness_utxo.as_mut().expect("receiver input has a witness utxo");
+        witness_utxo.script_pubkey = match script {
+            ReceiverScript::P2wpkh => p2wpkh.clone(),
+            ReceiverScript::P2shP2wpkh => ScriptBuf::new_p2sh(&p2wpkh.script_hash()),
+            ReceiverScript::P2tr =>
+                ScriptBuf::new_p2tr(SECP256K1, keypair.x_only_public_key().0, None),
+        };
+        let value = witness_utxo.value;
+
+        let prevouts = proposal
+            .input_pairs()
+            .map(|input_pair| input_pair.previous_txout().cloned())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("every input has a witness utxo");
+        let mut cache = SighashCache::new(&proposal.unsigned_tx);
+        let (script_sig, witness) = match script {
+            ReceiverScript::P2tr => {
+                let sighash_type = signing
+                    .sighash_type
+                    .map_or(Ok(TapSighashType::Default), |ty| ty.taproot_hash_ty())
+                    .expect("taproot sighash type");
+                let sighash = cache
+                    .taproot_key_spend_signature_hash(
+                        index,
+                        &Prevouts::All(&prevouts),
+                        sighash_type,
+                    )
+                    .expect("valid taproot sighash");
+                let tweaked = keypair.tap_tweak(SECP256K1, None).to_keypair();
+                let signature = SECP256K1.sign_schnorr_no_aux_rand(
+                    &Message::from_digest(sighash.to_byte_array()),
+                    &tweaked,
+                );
+                let signature = taproot::Signature { signature, sighash_type };
+                (None, Witness::p2tr_key_spend(&signature))
+            }
+            ReceiverScript::P2wpkh | ReceiverScript::P2shP2wpkh => {
+                let sighash_type = signing
+                    .sighash_type
+                    .map_or(Ok(EcdsaSighashType::All), |ty| ty.ecdsa_hash_ty())
+                    .expect("ECDSA sighash type");
+                let sighash = cache
+                    .p2wpkh_signature_hash(index, &p2wpkh, value, sighash_type)
+                    .expect("valid segwit v0 sighash");
+                let mut signature = SECP256K1
+                    .sign_ecdsa(&Message::from_digest(sighash.to_byte_array()), &secret_key);
+                if signing.high_s {
+                    signature = high_s(signature);
+                }
+                let witness = Witness::p2wpkh(&Signature { signature, sighash_type }, &pubkey.0);
+                let script_sig = matches!(script, ReceiverScript::P2shP2wpkh).then(|| {
+                    let redeem_script: &PushBytes =
+                        p2wpkh.as_bytes().try_into().expect("redeem script fits in a push");
+                    ScriptBuf::builder().push_slice(redeem_script).into_script()
+                });
+                (script_sig, witness)
+            }
+        };
+        let input = &mut proposal.inputs[index];
+        input.final_script_sig = script_sig;
+        input.final_script_witness = Some(witness);
+    }
+
+    /// The high S encoding of a low S `signature`, which signs the same
+    /// message.
+    fn high_s(
+        signature: bitcoin::secp256k1::ecdsa::Signature,
+    ) -> bitcoin::secp256k1::ecdsa::Signature {
+        let compact = signature.serialize_compact();
+        let s = SecretKey::from_slice(&compact[32..]).expect("s is a valid scalar").negate();
+        let mut compact = compact;
+        compact[32..].copy_from_slice(&s.secret_bytes());
+        let high_s = bitcoin::secp256k1::ecdsa::Signature::from_compact(&compact)
+            .expect("valid compact signature");
+        let mut normalized = high_s;
+        normalized.normalize_s();
+        assert_eq!(normalized, signature, "the encoding has a high S value");
+        assert_ne!(high_s, signature, "the encoding has a high S value");
+        high_s
+    }
+
+    /// Asserts that `proposal` fails because a receiver input does not prove
+    /// the spent output it claims.
+    fn assert_unverified_receiver_input(
+        ctx: &super::PsbtContext,
+        proposal: bitcoin::Psbt,
+        expected: InputSignatureError,
+    ) {
+        match ctx.clone().process_proposal(proposal) {
+            Err(InternalProposalError::ReceiverTxinUnverifiedUtxo(error)) =>
+                assert_eq!(error, expected),
+            other => panic!("expected an unverified receiver input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_receiver_input_signatures_accepted() -> Result<(), BoxError> {
+        let mut ctx = create_psbt_context()?;
+        let honest = proposal_without_contribution(&mut ctx);
+        for script in RECEIVER_SCRIPTS {
+            let mut proposal = honest.clone();
+            sign_receiver_input(&mut proposal, 1, script);
+            let result = ctx.clone().process_proposal(proposal);
+            assert!(result.is_ok(), "{script:?}: expected an Ok result got: {:#?}", result.err());
+        }
+        Ok(())
+    }
+
+    /// The BIP 78 proposal vector with the sender's fee contribution
+    /// undone, so receiver inputs smaller than the vector's P2SH-P2WPKH one
+    /// do not take more contribution than their weight allows.
+    fn proposal_without_contribution(ctx: &mut super::PsbtContext) -> bitcoin::Psbt {
+        ctx.fee_contribution = None;
+        let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+        proposal.unsigned_tx.output[0].value = ctx.original_psbt.unsigned_tx.output[0].value;
+        proposal
+    }
+
+    /// Adds `delta` to the value in the `witness_utxo` of the receiver input
+    /// at `index`, so it no longer matches the value that input signed.
+    fn offset_claimed_value(proposal: &mut bitcoin::Psbt, index: usize, delta: Amount) {
+        proposal.inputs[index].witness_utxo.as_mut().expect("receiver witness utxo").value += delta;
+    }
+
+    #[test]
+    fn test_receiver_input_ecdsa_sighash_types() -> Result<(), BoxError> {
+        let mut ctx = create_psbt_context()?;
+        let honest = proposal_without_contribution(&mut ctx);
+        let sighash_types = [
+            EcdsaSighashType::All,
+            EcdsaSighashType::None,
+            EcdsaSighashType::Single,
+            EcdsaSighashType::AllPlusAnyoneCanPay,
+            EcdsaSighashType::NonePlusAnyoneCanPay,
+            EcdsaSighashType::SinglePlusAnyoneCanPay,
+        ];
+        for script in [ReceiverScript::P2wpkh, ReceiverScript::P2shP2wpkh] {
+            for sighash_type in sighash_types {
+                for high_s in [false, true] {
+                    let signing = Signing { sighash_type: Some(sighash_type.into()), high_s };
+                    let mut proposal = honest.clone();
+                    sign_receiver_input_with(&mut proposal, 1, script, signing);
+                    let result = ctx.clone().process_proposal(proposal.clone());
+                    assert!(result.is_ok(), "{script:?} {signing:?}: got {:#?}", result.err());
+
+                    offset_claimed_value(&mut proposal, 1, Amount::from_sat(1));
+                    assert_unverified_receiver_input(
+                        &ctx,
+                        proposal,
+                        InputSignatureError::InvalidSignature,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_receiver_input_taproot_sighash_types() -> Result<(), BoxError> {
+        let mut ctx = create_psbt_context()?;
+        let honest = proposal_without_contribution(&mut ctx);
+        let sighash_types = [
+            TapSighashType::Default,
+            TapSighashType::All,
+            TapSighashType::None,
+            TapSighashType::Single,
+            TapSighashType::AllPlusAnyoneCanPay,
+            TapSighashType::NonePlusAnyoneCanPay,
+            TapSighashType::SinglePlusAnyoneCanPay,
+        ];
+        for sighash_type in sighash_types {
+            let signing = Signing { sighash_type: Some(sighash_type.into()), high_s: false };
+            let mut proposal = honest.clone();
+            sign_receiver_input_with(&mut proposal, 1, ReceiverScript::P2tr, signing);
+            let result = ctx.clone().process_proposal(proposal.clone());
+            assert!(result.is_ok(), "{sighash_type:?}: got {:#?}", result.err());
+
+            offset_claimed_value(&mut proposal, 1, Amount::from_sat(1));
+            assert_unverified_receiver_input(&ctx, proposal, InputSignatureError::InvalidSignature);
+        }
+        Ok(())
+    }
+
+    /// A receiver input placed before the sender's, next to a second receiver
+    /// input that a `non_witness_utxo` authenticates.
+    #[test]
+    fn test_receiver_inputs_reordered_and_mixed() -> Result<(), BoxError> {
+        let mut ctx = create_psbt_context()?;
+        let mut proposal = proposal_without_contribution(&mut ctx);
+        proposal.unsigned_tx.input.swap(0, 1);
+        proposal.inputs.swap(0, 1);
+
+        let value = Amount::from_sat(50_000);
+        let prev_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value,
+                script_pubkey: ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::all_zeros()),
+            }],
+        };
+        proposal.unsigned_tx.input.push(TxIn {
+            previous_output: OutPoint::new(prev_tx.compute_txid(), 0),
+            sequence: proposal.unsigned_tx.input[0].sequence,
+            ..Default::default()
+        });
+        proposal.inputs.push(bitcoin::psbt::Input {
+            witness_utxo: Some(prev_tx.output[0].clone()),
+            non_witness_utxo: Some(prev_tx),
+            // Not verified, since the previous transaction authenticates the output.
+            final_script_witness: Some(Witness::from_slice(&[[0u8; 72].as_slice(), &[2u8; 33]])),
+            ..Default::default()
+        });
+        proposal.unsigned_tx.output[1].value += value;
+
+        for script in RECEIVER_SCRIPTS {
+            let mut proposal = proposal.clone();
+            sign_receiver_input(&mut proposal, 0, script);
+            let result = ctx.clone().process_proposal(proposal.clone());
+            assert!(result.is_ok(), "{script:?}: got {:#?}", result.err());
+
+            offset_claimed_value(&mut proposal, 0, Amount::from_sat(1));
+            assert_unverified_receiver_input(&ctx, proposal, InputSignatureError::InvalidSignature);
+        }
+        Ok(())
+    }
+
+    /// Taproot signatures commit to the sender's spent output too, so the
+    /// sender verifies them against its own restored UTXO even when the
+    /// receiver strips it, as BIP 78 asks.
+    #[test]
+    fn test_taproot_receiver_input_with_stripped_sender_utxo() -> Result<(), BoxError> {
+        let mut ctx = create_psbt_context()?;
+        let mut proposal = proposal_without_contribution(&mut ctx);
+        sign_receiver_input(&mut proposal, 1, ReceiverScript::P2tr);
+        proposal.inputs[0].witness_utxo = None;
+        proposal.inputs[0].non_witness_utxo = None;
+
+        let result = ctx.clone().process_proposal(proposal.clone());
+        assert!(result.is_ok(), "Expected an Ok result got: {:#?}", result.err());
+
+        offset_claimed_value(&mut proposal, 1, Amount::from_sat(1));
+        assert_unverified_receiver_input(&ctx, proposal, InputSignatureError::InvalidSignature);
+        Ok(())
+    }
+
+    /// A receiver input built with [`InputPair::new_p2wsh`] carries only a
+    /// `witness_utxo`, which no signature check can authenticate. The sender
+    /// accepts it once the receiver adds the previous transaction.
+    ///
+    /// [`InputPair::new_p2wsh`]: crate::receive::InputPair::new_p2wsh
+    #[test]
+    fn test_p2wsh_receiver_input_needs_non_witness_utxo() -> Result<(), BoxError> {
+        use crate::receive::InputPair;
+
+        let mut ctx = create_psbt_context()?;
+        let honest = proposal_without_contribution(&mut ctx);
+        let witness_script = ScriptBuf::from_bytes(vec![0x51]); // OP_TRUE
+        let txout = TxOut {
+            value: honest.inputs[1].witness_utxo.as_ref().expect("receiver witness utxo").value,
+            script_pubkey: ScriptBuf::new_p2wsh(&witness_script.wscript_hash()),
+        };
+        let prev_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![txout.clone()],
+        };
+        let outpoint = OutPoint::new(prev_tx.compute_txid(), 0);
+        let expected_weight = Weight::from_wu(200);
+        // Splices `pair` in as the receiver input, finalized as its wallet would.
+        let contribute = |pair: InputPair| {
+            let mut proposal = honest.clone();
+            proposal.unsigned_tx.input[1].previous_output = pair.txin.previous_output;
+            proposal.inputs[1] = bitcoin::psbt::Input {
+                final_script_witness: Some(Witness::from_slice(&[witness_script.as_bytes()])),
+                ..pair.psbtin
+            };
+            proposal
+        };
+
+        let bare = InputPair::new_p2wsh(txout.clone(), outpoint, expected_weight)?;
+        assert!(bare.psbtin.non_witness_utxo.is_none());
+        assert_unverified_receiver_input(
+            &ctx,
+            contribute(bare),
+            InputSignatureError::UnsupportedScript,
+        );
+
+        let with_prev_tx = InputPair::new(
+            TxIn { previous_output: outpoint, ..Default::default() },
+            bitcoin::psbt::Input {
+                witness_utxo: Some(txout),
+                non_witness_utxo: Some(prev_tx),
+                ..Default::default()
+            },
+            Some(expected_weight),
+        )?;
+        let result = ctx.process_proposal(contribute(with_prev_tx));
+        assert!(result.is_ok(), "Expected an Ok result got: {:#?}", result.err());
+        Ok(())
+    }
+
+    /// `check_receiver_input_signatures` trusts a `non_witness_utxo` only
+    /// after checking it, without relying on `check_inputs` to have done so.
+    #[test]
+    fn test_receiver_input_signatures_check_non_witness_utxo() -> Result<(), BoxError> {
+        let ctx = create_psbt_context()?;
+        let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+        let receiver_index = with_receiver_non_witness_utxo(&mut proposal);
+        assert!(ctx.check_receiver_input_signatures(&proposal).is_ok());
+
+        offset_claimed_value(&mut proposal, receiver_index, Amount::from_sat(1));
+        assert!(matches!(
+            ctx.check_receiver_input_signatures(&proposal),
+            Err(InternalProposalError::ReceiverTxinInvalidUtxo(
+                InternalPsbtInputError::SegWitTxOutMismatch
+            ))
+        ));
+        Ok(())
+    }
+
+    /// The claimed previous output of a receiver input does not match the
+    /// signed one, and an output differs by the same delta, so the computed
+    /// fee is unchanged. The signature check rejects the input.
+    #[test]
+    fn test_receiver_input_value_mismatch_rejected() -> Result<(), BoxError> {
+        let ctx = create_psbt_context()?;
+        let honest = PARSED_PAYJOIN_PROPOSAL.clone();
+        let delta = absolute_fee(&honest)? - Amount::from_sat(1);
+        let contributed_fee =
+            ctx.original_psbt.unsigned_tx.output[0].value - honest.unsigned_tx.output[0].value;
+
+        let with_claimed_value = |mut proposal: bitcoin::Psbt| {
+            offset_claimed_value(&mut proposal, 1, delta);
+            proposal
+        };
+        let mut adjusted = honest.clone();
+        adjusted.unsigned_tx.output[1].value += delta;
+
+        // The BIP 78 vector's own P2SH-P2WPKH signature.
+        let mismatched = with_claimed_value(adjusted.clone());
+        assert!(
+            ctx.check_fees(&mismatched, contributed_fee).is_ok(),
+            "fee checks use the claimed values"
+        );
+        assert_unverified_receiver_input(&ctx, mismatched, InputSignatureError::InvalidSignature);
+
+        for script in RECEIVER_SCRIPTS {
+            let mut signed = adjusted.clone();
+            sign_receiver_input(&mut signed, 1, script);
+            assert_unverified_receiver_input(
+                &ctx,
+                with_claimed_value(signed),
+                InputSignatureError::InvalidSignature,
+            );
+        }
+        Ok(())
+    }
+
+    /// The claimed previous output of a receiver input does not match the
+    /// signed one, by the delta that brings the computed fee rate up to the
+    /// sender's minimum. The outputs, including the sender's fee
+    /// contribution, are unchanged. The signature check rejects the input.
+    #[test]
+    fn test_receiver_input_value_mismatch_rejected_at_min_fee_rate() -> Result<(), BoxError> {
+        let mut ctx = create_psbt_context()?;
+        let honest = PARSED_PAYJOIN_PROPOSAL.clone();
+        let weight = honest.clone().extract_tx_unchecked_fee_rate().weight();
+        let honest_fee_rate = absolute_fee(&honest)?.div_by_weight_floor(weight).expect("fee rate");
+        ctx.min_fee_rate = FeeRate::from_sat_per_kwu(honest_fee_rate.to_sat_per_kwu() + 1000);
+        let delta = ctx.min_fee_rate.fee_wu(weight).expect("fee fits") - absolute_fee(&honest)?;
+        let contributed_fee =
+            ctx.original_psbt.unsigned_tx.output[0].value - honest.unsigned_tx.output[0].value;
+        assert!(contributed_fee > Amount::ZERO);
+
+        assert!(matches!(
+            ctx.clone().process_proposal(honest.clone()),
+            Err(InternalProposalError::FeeRateBelowMinimum)
+        ));
+
+        let mut mismatched = honest.clone();
+        offset_claimed_value(&mut mismatched, 1, delta);
+        assert!(
+            ctx.check_fees(&mismatched, contributed_fee).is_ok(),
+            "fee checks use the claimed values"
+        );
+        assert_unverified_receiver_input(&ctx, mismatched, InputSignatureError::InvalidSignature);
+        Ok(())
+    }
+
+    #[test]
+    fn test_receiver_input_unsupported_script() -> Result<(), BoxError> {
+        let ctx = create_psbt_context()?;
+
+        // A legacy output can only be authenticated by its previous transaction.
+        let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+        proposal.inputs[1].witness_utxo.as_mut().expect("receiver witness utxo").script_pubkey =
+            ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::all_zeros());
+        assert_unverified_receiver_input(&ctx, proposal, InputSignatureError::UnsupportedScript);
+
+        // A taproot script path spend.
+        let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+        sign_receiver_input(&mut proposal, 1, ReceiverScript::P2tr);
+        let witness = proposal.inputs[1].final_script_witness.as_mut().expect("signed input");
+        witness.push([0x51]);
+        witness.push([0xc0; 33]);
+        assert_unverified_receiver_input(&ctx, proposal, InputSignatureError::UnsupportedScript);
+        Ok(())
+    }
+
+    #[test]
+    fn test_receiver_input_witness_for_another_key() -> Result<(), BoxError> {
+        let ctx = create_psbt_context()?;
+        for script in [ReceiverScript::P2wpkh, ReceiverScript::P2shP2wpkh] {
+            let mut proposal = PARSED_PAYJOIN_PROPOSAL.clone();
+            sign_receiver_input(&mut proposal, 1, script);
+            // Point the claimed output at another key the witness does not reveal.
+            let witness_utxo = proposal.inputs[1].witness_utxo.as_mut().expect("witness utxo");
+            witness_utxo.script_pubkey = match script {
+                ReceiverScript::P2wpkh => ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::all_zeros()),
+                _ =>
+                    PARSED_PAYJOIN_PROPOSAL.inputs[1]
+                        .witness_utxo
+                        .clone()
+                        .expect("witness utxo")
+                        .script_pubkey,
+            };
+            assert_unverified_receiver_input(&ctx, proposal, InputSignatureError::MalformedSpend);
+        }
         Ok(())
     }
 
@@ -1754,6 +2280,7 @@ mod test {
 
             // When output substitution is disabled still allow increasing the output value
             proposal.unsigned_tx.output[0].value += MAX_ADDITIONAL_FEE_CONTRIBUTION;
+            sign_receiver_input(&mut proposal, 1, ReceiverScript::P2shP2wpkh);
             assert!(ctx.clone().process_proposal(proposal.clone()).is_ok());
 
             proposal.unsigned_tx.output[0].value -= MAX_ADDITIONAL_FEE_CONTRIBUTION;
@@ -1763,6 +2290,7 @@ mod test {
                 &mut ctx.original_psbt.unsigned_tx.output[0].value,
                 &mut proposal.unsigned_tx.output[0].value,
             );
+            sign_receiver_input(&mut proposal, 1, ReceiverScript::P2shP2wpkh);
             assert_eq!(
                 ctx.process_proposal(proposal).unwrap_err().to_string(),
                 InternalProposalError::DisallowedOutputSubstitution.to_string()
@@ -1784,9 +2312,11 @@ mod test {
             assert!(ctx.clone().process_proposal(proposal.clone()).is_ok());
 
             proposal.unsigned_tx.output[0].value += MAX_ADDITIONAL_FEE_CONTRIBUTION;
+            sign_receiver_input(&mut proposal, 1, ReceiverScript::P2shP2wpkh);
             assert!(ctx.clone().process_proposal(proposal.clone()).is_ok());
 
             proposal.unsigned_tx.output[0].value -= Amount::from_sat(364);
+            sign_receiver_input(&mut proposal, 1, ReceiverScript::P2shP2wpkh);
             assert!(ctx.process_proposal(proposal).is_ok());
 
             Ok(())
@@ -1872,6 +2402,7 @@ mod test {
 
             // Reduce the proposed fee to be less than the original fee
             proposal.unsigned_tx.output[0].value += bitcoin::Amount::from_sat(183);
+            sign_receiver_input(&mut proposal, 1, ReceiverScript::P2shP2wpkh);
 
             assert_eq!(
                 ctx.process_proposal(proposal).unwrap_err().to_string(),

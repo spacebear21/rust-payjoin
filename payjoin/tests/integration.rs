@@ -132,6 +132,7 @@ mod integration {
             // this data would transit from one party to another over the network in production
             let response = handle_v1_pj_request(req, headers, &receiver, None, None, None)?;
             // this response would be returned as http response to the sender
+            let response = strip_receiver_non_witness_utxos(&response)?;
 
             // **********************
             // Inside the Sender:
@@ -155,6 +156,20 @@ mod integration {
                 Amount::from_btc(49.0)? - network_fees
             );
             Ok(())
+        }
+
+        /// bitcoind adds a `non_witness_utxo` to the segwit v0 inputs it signs,
+        /// which authenticates the spent output without its signature. Strip it
+        /// from the receiver's segwit inputs, as other wallets may, so the
+        /// sender verifies bitcoind's signatures instead.
+        fn strip_receiver_non_witness_utxos(psbt: &str) -> Result<String, BoxError> {
+            let mut psbt = Psbt::from_str(psbt)?;
+            for input in &mut psbt.inputs {
+                if input.final_script_witness.is_some() {
+                    input.non_witness_utxo = None;
+                }
+            }
+            Ok(psbt.to_string())
         }
 
         #[test]

@@ -453,6 +453,8 @@
               # Applies the manylinux platform tag the release wheel satisfies;
               # PyPI rejects raw linux_x86_64 wheels.
               auditwheel
+              # build-wheel.sh compares the packed library with its input.
+              unzip
             ];
 
           env = {

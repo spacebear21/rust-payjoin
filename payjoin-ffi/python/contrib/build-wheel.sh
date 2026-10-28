@@ -77,5 +77,9 @@ else
     wheel tags --platform-tag macosx_10_15_universal2 --remove dist/*.whl
 fi
 
+# The release lists the library on its own, so the wheel must carry it
+# unchanged.
+unzip -p dist/*.whl "payjoin/$(basename "$LIBRARY")" | cmp - "$LIBRARY"
+
 echo "==> Built wheel:"
 ls -l dist

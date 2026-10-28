@@ -52,9 +52,9 @@ the C# bindings):
 bash ./scripts/build_nuget_native.sh
 ```
 
-CI builds every RID's native asset on Linux under the
-[native build contract](../../contrib/native/README.md). To build one the same
-way, run from the repository root with the target triple for the RID, then copy
+CI packs every RID's native asset from the native workflow, which builds them
+on Linux under the [native build contract](../../contrib/native/README.md). To
+build one the same way, run from the repository root with the target triple for the RID, then copy
 `<out-dir>/<triple>/*` to `payjoin-ffi/csharp/artifacts/runtimes/{rid}/native/`:
 
 ```shell

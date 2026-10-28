@@ -5,6 +5,9 @@
   macOS 10.15 and later, down from 13.
 - Dart: Android builds with NDK r27 now align 64-bit libraries to
   16 KB, as Google Play requires. Later NDKs already did.
+- The GitHub release now attaches every native library as
+  `payjoin_ffi-<version>-<target>.<ext>`, listed in `SHA256SUMS` and
+  attested. `VERIFYING.md` explains how to check one or rebuild it.
 
 ## [0.25.1]
 
